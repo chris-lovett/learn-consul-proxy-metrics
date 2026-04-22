@@ -1,4 +1,4 @@
-# Consul Proxy Metrics Monitoring on OpenShift (ROSA)
+# Consul Proxy Metrics Monitoring on OpenShift
 
 Monitor Consul service mesh health and performance using OpenShift's built-in monitoring stack on ROSA (Red Hat OpenShift Service on AWS).
 
