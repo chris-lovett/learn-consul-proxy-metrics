@@ -1,0 +1,82 @@
+# Grafana Helm values for OpenShift (ROSA)
+# Configured to query metrics via the built-in Thanos Querier
+
+# Disable init container that runs as root (blocked by OpenShift SCCs)
+initChownData:
+  enabled: false
+
+# OpenShift-compatible security context
+# runAsUser is omitted so OpenShift assigns a UID from the namespace range
+securityContext:
+  runAsNonRoot: true
+  fsGroup: null
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+
+# Use the grafana service account we created with cluster-monitoring-view
+serviceAccount:
+  create: false
+  name: grafana
+
+# Persist data across pod restarts
+persistence:
+  enabled: true
+  size: 10Gi
+  storageClassName: gp3-csi
+
+# Admin credentials
+adminUser: admin
+# adminPassword is set via --set at install time, not stored in this file
+
+# Disable seccomp annotations that OpenShift forbids
+podAnnotations: {}
+
+# Datasource: Thanos Querier with Bearer token auth
+# The token is read from the grafana-thanos-token secret (created separately)
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        url: https://thanos-querier-openshift-monitoring.apps.rosa.cluster1.6cxo.p3.openshiftapps.com
+        access: proxy
+        isDefault: true
+        jsonData:
+          tlsSkipVerify: true
+          httpHeaderName1: "Authorization"
+        secureJsonData:
+          httpHeaderValue1: "Bearer ${THANOS_TOKEN}"
+
+# Sidecar to auto-load dashboards from ConfigMaps
+sidecar:
+  dashboards:
+    enabled: true
+    label: grafana_dashboard
+    labelValue: "1"
+    searchNamespace: observability
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+    runAsNonRoot: true
+
+# Pre-load the Consul dashboards from the dashboards/ directory
+# Apply these separately as ConfigMaps (see instructions below)
+dashboardProviders:
+  dashboardproviders.yaml:
+    apiVersion: 1
+    providers:
+      - name: consul
+        orgId: 1
+        folder: Consul
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards/consul
