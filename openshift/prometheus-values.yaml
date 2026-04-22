@@ -1,0 +1,133 @@
+# Prometheus Helm Values for OpenShift
+# Adapted for ROSA with Consul Enterprise 1.22.6+ent
+# Internal access only, with persistent storage option
+
+global:
+  scrape_interval: 5s
+  scrape_timeout: 3s
+
+server:
+  enabled: true
+  
+  # OpenShift: Remove securityContext - handled by SCCs
+  # The restricted-v2 SCC will be applied automatically
+  
+  podAnnotations:
+    "consul.hashicorp.com/connect-inject": "false"
+  
+  readinessProbeInitialDelay: 0
+  
+  # Persistent storage for production
+  persistentVolume:
+    enabled: true
+    storageClass: "gp3-csi"  # AWS EBS gp3 for ROSA
+    size: 20Gi
+    accessModes:
+      - ReadWriteOnce
+  
+  # Resource limits for production
+  resources:
+    limits:
+      cpu: 1000m
+      memory: 2Gi
+    requests:
+      cpu: 500m
+      memory: 1Gi
+  
+  # Retention for metrics
+  retention: "15d"
+  
+  # Service configuration - ClusterIP for internal access
+  service:
+    type: ClusterIP
+    port: 80
+  
+  # Scrape configs for Consul metrics
+  extraScrapeConfigs: |
+    # Scrape Consul servers
+    - job_name: 'consul-servers'
+      consul_sd_configs:
+        - server: 'consul-server.consul.svc.cluster.local:8500'
+          datacenter: 'dc1'
+          services: ['consul']
+      relabel_configs:
+        - source_labels: [__meta_consul_service]
+          target_label: job
+        - source_labels: [__meta_consul_node]
+          target_label: instance
+      metrics_path: '/v1/agent/metrics'
+      params:
+        format: ['prometheus']
+    
+    # Scrape Envoy sidecars via Consul Connect
+    - job_name: 'consul-connect-proxies'
+      consul_sd_configs:
+        - server: 'consul-server.consul.svc.cluster.local:8500'
+          datacenter: 'dc1'
+      relabel_configs:
+        - source_labels: [__meta_consul_service]
+          regex: '.*-sidecar-proxy'
+          action: keep
+        - source_labels: [__meta_consul_service_metadata_envoy_prometheus_bind_addr]
+          action: keep
+          regex: (.+)
+        - source_labels: [__meta_consul_service_metadata_envoy_prometheus_bind_addr]
+          target_label: __address__
+        - source_labels: [__meta_consul_service]
+          target_label: job
+        - source_labels: [__meta_consul_node]
+          target_label: instance
+
+alertmanager:
+  enabled: false
+
+nodeExporter:
+  enabled: true
+  podAnnotations:
+    "consul.hashicorp.com/connect-inject": "false"
+  # OpenShift: Remove securityContext
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+pushgateway:
+  enabled: false
+
+kube-state-metrics:
+  enabled: true
+  podAnnotations:
+    "consul.hashicorp.com/connect-inject": "false"
+  # OpenShift: Remove securityContext
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+serviceAccounts:
+  alertmanager:
+    create: false
+  nodeExporter:
+    create: true
+    annotations: {}
+  pushgateway:
+    create: false
+  server:
+    create: true
+    annotations: {}
+
+# RBAC for OpenShift
+rbac:
+  create: true
+
+# Network policy (optional - OpenShift has its own)
+networkPolicy:
+  enabled: false
+
+# Made with Bob

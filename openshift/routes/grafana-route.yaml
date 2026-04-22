@@ -1,0 +1,27 @@
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: grafana
+  namespace: observability
+  labels:
+    app: grafana
+  annotations:
+    # Internal access only - no external DNS
+    haproxy.router.openshift.io/timeout: 5m
+spec:
+  # Internal hostname - accessible within cluster/VPN
+  # Will be: grafana-observability.apps.<cluster-name>.<region>.openshiftapps.com
+  to:
+    kind: Service
+    name: grafana
+    weight: 100
+  port:
+    targetPort: service
+  tls:
+    # Edge termination - TLS at router, HTTP to pod
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None
+
+# Made with Bob

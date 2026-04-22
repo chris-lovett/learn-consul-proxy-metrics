@@ -1,0 +1,27 @@
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: prometheus
+  namespace: observability
+  labels:
+    app: prometheus
+  annotations:
+    # Internal access only - no external DNS
+    haproxy.router.openshift.io/timeout: 5m
+spec:
+  # Internal hostname - accessible within cluster/VPN
+  # Will be: prometheus-observability.apps.<cluster-name>.<region>.openshiftapps.com
+  to:
+    kind: Service
+    name: prometheus-server
+    weight: 100
+  port:
+    targetPort: 80
+  tls:
+    # Edge termination - TLS at router, HTTP to pod
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+  wildcardPolicy: None
+
+# Made with Bob
