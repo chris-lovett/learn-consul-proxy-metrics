@@ -1,0 +1,19 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: consul-connect-injected
+  namespace: consul
+  labels:
+    app: consul
+spec:
+  selector:
+    matchLabels:
+      consul.hashicorp.com/connect-inject-status: "injected"
+  endpoints:
+  - port: envoy-metrics
+    path: /stats/prometheus
+    interval: 30s
+  namespaceSelector:
+    any: true
+
+# Made with Bob

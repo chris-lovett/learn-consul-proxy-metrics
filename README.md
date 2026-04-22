@@ -1,15 +1,23 @@
 # Consul Proxy Metrics Monitoring on OpenShift
 
-Deploy Prometheus and Grafana to monitor Consul service mesh health and performance with proxy metrics on Red Hat OpenShift.
+Monitor Consul service mesh health and performance using OpenShift's built-in monitoring stack.
 
 ## Overview
 
-This guide helps you set up comprehensive monitoring for your Consul service mesh using Prometheus for metrics collection and Grafana for visualization. You'll gain insights into:
+OpenShift ships with a comprehensive monitoring stack (Prometheus and Grafana) that you can extend to monitor your Consul service mesh. This guide shows you how to configure the built-in monitoring to collect and visualize Consul proxy metrics, giving you insights into:
 
 - **Service Health:** Real-time health status of all services
 - **Proxy Performance:** Envoy sidecar metrics including request rates, latency, and throughput
 - **Network Traffic:** Upstream/downstream communication patterns
 - **Error Tracking:** Error rates and failure patterns across your mesh
+
+## Why Use Built-in Monitoring?
+
+✅ **Already Deployed:** No need to install additional Prometheus/Grafana instances
+✅ **Integrated:** Seamlessly works with OpenShift's monitoring infrastructure
+✅ **Maintained:** Automatically updated with OpenShift
+✅ **Secure:** Uses OpenShift's authentication and RBAC
+✅ **Cost Effective:** No additional storage or compute resources needed
 
 ## Prerequisites
 
@@ -17,9 +25,9 @@ Before starting, ensure you have:
 
 - ✅ **OpenShift Cluster:** ROSA or any OpenShift 4.x cluster
 - ✅ **Consul Deployed:** Consul Enterprise or OSS already running
-- ✅ **CLI Tools:** `oc` (OpenShift CLI) and `helm` (version 3.x)
-- ✅ **Cluster Access:** Cluster-admin or appropriate RBAC permissions
-- ✅ **Storage:** A storage class available (e.g., `gp3-csi` on AWS)
+- ✅ **CLI Tools:** `oc` (OpenShift CLI)
+- ✅ **Cluster Access:** Cluster-admin or monitoring-edit permissions
+- ✅ **User Workload Monitoring:** Enabled (we'll verify this)
 
 ### Verify Your Environment
 
@@ -35,88 +43,54 @@ oc get svc -n consul
 # Verify Consul version
 oc get pods -n consul -l app=consul -o jsonpath='{.items[0].spec.containers[0].image}'
 
-# Check available storage classes
-oc get storageclass
+# Check if user workload monitoring is enabled
+oc get configmap cluster-monitoring-config -n openshift-monitoring -o yaml
 ```
 
-## Quick Start (70 minutes)
+## Quick Start (30 minutes)
 
-### 1. Create Observability Namespace (2 min)
+### 1. Enable User Workload Monitoring (5 min)
+
+OpenShift's monitoring stack has two components:
+- **Platform monitoring:** Monitors OpenShift itself (already enabled)
+- **User workload monitoring:** Monitors your applications (needs to be enabled)
 
 ```bash
-oc new-project observability
+# Check if already enabled
+oc get configmap cluster-monitoring-config -n openshift-monitoring -o yaml | grep enableUserWorkload
+
+# If not enabled, create/update the config
+cat <<EOF | oc apply -f -
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cluster-monitoring-config
+  namespace: openshift-monitoring
+data:
+  config.yaml: |
+    enableUserWorkload: true
+EOF
+
+# Wait for user workload monitoring pods to start
+oc get pods -n openshift-user-workload-monitoring
+
+# Expected pods:
+# - prometheus-operator
+# - prometheus-user-workload (2 replicas)
+# - thanos-ruler (2 replicas)
 ```
 
-### 2. Add Helm Repositories (3 min)
+### 2. Configure Consul Metrics (10 min)
+
+Ensure Consul is configured to expose metrics:
 
 ```bash
-# Add Prometheus and Grafana repos
-helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-helm repo add grafana https://grafana.github.io/helm-charts
-helm repo update
-
-# Verify repos
-helm search repo prometheus-community/prometheus
-helm search repo grafana/grafana
-```
-
-### 3. Deploy Prometheus (20 min)
-
-```bash
-# Deploy Prometheus with OpenShift configuration
-helm install prometheus prometheus-community/prometheus \
-  -n observability \
-  -f openshift/prometheus-values.yaml \
-  --wait
-
-# Verify deployment
-oc get pods -n observability -l app.kubernetes.io/name=prometheus
-oc wait --for=condition=ready pod -l app.kubernetes.io/name=prometheus -n observability --timeout=300s
-
-# Create route for access
-oc apply -f openshift/routes/prometheus-route.yaml
-
-# Get Prometheus URL
-PROM_URL=$(oc get route prometheus -n observability -o jsonpath='{.spec.host}')
-echo "Prometheus: https://$PROM_URL"
-```
-
-### 4. Deploy Grafana (20 min)
-
-```bash
-# Deploy Grafana with OpenShift configuration
-helm install grafana grafana/grafana \
-  -n observability \
-  -f openshift/grafana-values.yaml \
-  --wait
-
-# Verify deployment
-oc get pods -n observability -l app.kubernetes.io/name=grafana
-oc wait --for=condition=ready pod -l app.kubernetes.io/name=grafana -n observability --timeout=300s
-
-# Create route for access
-oc apply -f openshift/routes/grafana-route.yaml
-
-# Get Grafana credentials
-GRAFANA_URL=$(oc get route grafana -n observability -o jsonpath='{.spec.host}')
-GRAFANA_PASS=$(oc get secret grafana -n observability -o jsonpath="{.data.admin-password}" | base64 -d)
-
-echo "Grafana URL: https://$GRAFANA_URL"
-echo "Username: admin"
-echo "Password: $GRAFANA_PASS"
-```
-
-### 5. Configure Consul Metrics (15 min)
-
-Check if metrics are already enabled in your Consul deployment:
-
-```bash
-# Get current Consul configuration
+# Check current Consul configuration
 helm get values consul -n consul > /tmp/current-consul-values.yaml
 grep -A 5 "metrics:" /tmp/current-consul-values.yaml
 ```
 
-If metrics are not enabled, create an addon configuration:
+If metrics are not enabled, update Consul:
 
 ```bash
 cat > /tmp/consul-metrics-addon.yaml <<'EOF'
@@ -149,316 +123,505 @@ helm upgrade consul hashicorp/consul \
 Verify metrics are accessible:
 
 ```bash
-# Test Consul metrics endpoint
+# Test Consul server metrics
 oc exec -n consul consul-server-0 -- curl -s http://localhost:8500/v1/agent/metrics?format=prometheus | head -20
-
-# Check Prometheus is scraping Consul
-PROM_URL=$(oc get route prometheus -n observability -o jsonpath='{.spec.host}')
-curl -k "https://$PROM_URL/api/v1/targets" | jq '.data.activeTargets[] | select(.labels.job | contains("consul"))'
 ```
 
-### 6. Access Grafana Dashboards (10 min)
+### 3. Create ServiceMonitor for Consul (5 min)
 
-Open Grafana in your browser using the URL from step 4, then:
+ServiceMonitor is a custom resource that tells Prometheus what to scrape:
 
-1. **Login** with username `admin` and the password from step 4
-2. **Navigate** to Dashboards → Browse
-3. **Open** the Consul folder to find two pre-loaded dashboards:
-   - **Consul Data Plane Health** - Service and proxy health status
-   - **Consul Data Plane Performance** - Request rates, latency, and throughput
+```bash
+# Create ServiceMonitor for Consul servers
+cat <<EOF | oc apply -f -
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: consul-server
+  namespace: consul
+  labels:
+    app: consul
+spec:
+  selector:
+    matchLabels:
+      app: consul
+      component: server
+  endpoints:
+  - port: http
+    path: /v1/agent/metrics
+    params:
+      format: ['prometheus']
+    interval: 30s
+EOF
 
-The dashboards should immediately show metrics from your Consul deployment.
+# Create ServiceMonitor for Consul clients (if applicable)
+cat <<EOF | oc apply -f -
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: consul-client
+  namespace: consul
+  labels:
+    app: consul
+spec:
+  selector:
+    matchLabels:
+      app: consul
+      component: client
+  endpoints:
+  - port: http
+    path: /v1/agent/metrics
+    params:
+      format: ['prometheus']
+    interval: 30s
+EOF
 
-## What Gets Deployed
+# Create ServiceMonitor for Envoy sidecars
+cat <<EOF | oc apply -f -
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: consul-connect-injected
+  namespace: consul
+  labels:
+    app: consul
+spec:
+  selector:
+    matchLabels:
+      consul.hashicorp.com/connect-inject-status: "injected"
+  endpoints:
+  - port: envoy-metrics
+    path: /stats/prometheus
+    interval: 30s
+  namespaceSelector:
+    any: true
+EOF
 
-### Prometheus Stack
-- **Prometheus Server:** Metrics collection and storage (20Gi persistent volume, 15-day retention)
-- **Node Exporter:** Host-level metrics from OpenShift nodes
-- **Kube State Metrics:** Kubernetes object metrics
-- **OpenShift Route:** Internal HTTPS access to Prometheus UI
+# Verify ServiceMonitors are created
+oc get servicemonitor -n consul
+```
 
-### Grafana Stack
-- **Grafana Server:** Metrics visualization (10Gi persistent volume)
-- **Pre-configured Datasource:** Prometheus connection
-- **Auto-loaded Dashboards:** Two Consul monitoring dashboards
-- **OpenShift Route:** Internal HTTPS access to Grafana UI
+### 4. Access Grafana and Import Dashboards (10 min)
 
-### Configuration Features
-- ✅ **OpenShift Compatible:** No security context conflicts with SCCs
-- ✅ **Persistent Storage:** Data survives pod restarts
-- ✅ **Internal Access:** Routes with TLS edge termination
-- ✅ **Production Ready:** Authentication enabled, proper RBAC
-- ✅ **Consul Discovery:** Automatic service discovery for scraping
+OpenShift's Grafana is accessible through the console:
 
-## Dashboards
+```bash
+# Get the Grafana route
+oc get route grafana -n openshift-monitoring
 
-### Consul Data Plane Health
+# Or access via OpenShift Console:
+# Navigate to: Observe → Dashboards
+```
 
-Monitor the overall health of your service mesh:
+**Import Consul Dashboards:**
 
-- **Service Health Status:** Up/down status for all services
-- **Proxy Health:** Envoy sidecar health indicators
-- **Connection Status:** Active connections and connection pools
-- **Error Rates:** HTTP error rates by service and endpoint
+1. **Access Grafana:**
+   - OpenShift Console → Observe → Dashboards
+   - Or use the Grafana route URL
 
-### Consul Data Plane Performance
+2. **Login:**
+   - Use your OpenShift credentials (SSO)
 
-Track performance metrics across your mesh:
+3. **Import Dashboards:**
+   - Click **+** → **Import**
+   - Upload `dashboards/consul-data-plane-health.json`
+   - Select **Prometheus** as data source
+   - Click **Import**
+   - Repeat for `dashboards/consul-data-plane-performance.json`
 
-- **Request Rates:** Requests per second (RPS) by service
-- **Latency Percentiles:** P50, P95, P99 response times
-- **Throughput:** Bytes sent/received per service
-- **Resource Usage:** CPU and memory for proxies
+**Alternative: Import via CLI (if you have Grafana API access):**
+
+```bash
+# Get Grafana route
+GRAFANA_URL=$(oc get route grafana -n openshift-monitoring -o jsonpath='{.spec.host}')
+
+# Get auth token (requires cluster-admin)
+TOKEN=$(oc sa get-token grafana -n openshift-monitoring)
+
+# Import dashboard
+curl -X POST "https://$GRAFANA_URL/api/dashboards/db" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d @dashboards/consul-data-plane-health.json
+```
+
+## What Gets Configured
+
+### ServiceMonitors
+Three ServiceMonitors are created to scrape metrics:
+
+1. **consul-server:** Scrapes Consul server metrics
+   - Endpoint: `/v1/agent/metrics?format=prometheus`
+   - Interval: 30 seconds
+
+2. **consul-client:** Scrapes Consul client metrics (if using clients)
+   - Endpoint: `/v1/agent/metrics?format=prometheus`
+   - Interval: 30 seconds
+
+3. **consul-connect-injected:** Scrapes Envoy sidecar metrics
+   - Endpoint: `/stats/prometheus`
+   - Interval: 30 seconds
+   - Namespace: All namespaces with injected sidecars
+
+### Dashboards
+
+Two comprehensive Grafana dashboards:
+
+1. **Consul Data Plane Health**
+   - Service health status
+   - Proxy health indicators
+   - Connection status
+   - Error rates
+
+2. **Consul Data Plane Performance**
+   - Request rates (RPS)
+   - Latency percentiles (P50, P95, P99)
+   - Throughput metrics
+   - Resource usage
 
 ## Verification
 
 Confirm everything is working:
 
 ```bash
-# Check all pods are running
-oc get pods -n observability
+# Check ServiceMonitors are created
+oc get servicemonitor -n consul
 
-# Expected output:
-# NAME                                    READY   STATUS    RESTARTS   AGE
-# grafana-xxxxx                          1/1     Running   0          5m
-# prometheus-kube-state-metrics-xxxxx    1/1     Running   0          10m
-# prometheus-node-exporter-xxxxx         1/1     Running   0          10m
-# prometheus-server-xxxxx                1/1     Running   0          10m
+# Check Prometheus is scraping Consul targets
+# Access Prometheus UI: Observe → Metrics → Prometheus UI
+# Or via CLI:
+oc get route prometheus-k8s -n openshift-monitoring
 
-# Check persistent volumes are bound
-oc get pvc -n observability
-# Both prometheus-server and grafana should show "Bound"
+# Query for Consul metrics
+# In Prometheus UI, try queries like:
+# - consul_health_service_query_count
+# - envoy_cluster_upstream_rq_total
+# - consul_raft_leader
 
-# Check routes are accessible
-oc get routes -n observability
-
-# Verify Prometheus targets are healthy
-PROM_URL=$(oc get route prometheus -n observability -o jsonpath='{.spec.host}')
-curl -k "https://$PROM_URL/api/v1/targets" | jq '.data.activeTargets[] | select(.health != "up")'
-# Should return empty (all targets healthy)
+# Check for any scrape errors
+# In Prometheus UI: Status → Targets
+# Look for consul-server, consul-client, and consul-connect-injected targets
 ```
 
 ## Troubleshooting
 
-### Prometheus Not Scraping Consul
+### ServiceMonitor Not Scraping
 
 **Symptom:** No Consul metrics in Prometheus
 
 ```bash
-# Check Prometheus targets
-PROM_URL=$(oc get route prometheus -n observability -o jsonpath='{.spec.host}')
-curl -k "https://$PROM_URL/api/v1/targets" | jq '.data.activeTargets[] | select(.labels.job | contains("consul"))'
+# Check ServiceMonitor exists
+oc get servicemonitor -n consul
 
-# Verify Consul metrics endpoint
-oc exec -n consul consul-server-0 -- curl -s http://localhost:8500/v1/agent/metrics?format=prometheus
+# Check if services have correct labels
+oc get svc -n consul --show-labels
 
-# Check Prometheus can reach Consul
-oc exec -n observability deployment/prometheus-server -- wget -qO- http://consul-server.consul.svc.cluster.local:8500/v1/agent/metrics?format=prometheus
+# Check Prometheus logs
+oc logs -n openshift-user-workload-monitoring prometheus-user-workload-0 -c prometheus
+
+# Verify service endpoints
+oc get endpoints -n consul
 ```
 
-**Solution:** Ensure Consul metrics are enabled (see step 5) and Prometheus has network access to Consul services.
+**Solution:** Ensure service labels match ServiceMonitor selectors. The ServiceMonitor must be in the same namespace as the services.
 
-### Grafana Shows No Data
+### Metrics Not Appearing in Grafana
 
-**Symptom:** Dashboards are empty or show "No data"
+**Symptom:** Dashboards show "No data"
 
 ```bash
-# Test Prometheus datasource from Grafana
-oc exec -n observability deployment/grafana -- wget -qO- http://prometheus-server.observability.svc.cluster.local/api/v1/query?query=up
+# Test Prometheus query directly
+oc exec -n openshift-user-workload-monitoring prometheus-user-workload-0 -c prometheus -- \
+  wget -qO- 'http://localhost:9090/api/v1/query?query=up{job="consul-server"}'
 
-# Check Grafana logs
-oc logs -n observability deployment/grafana | grep -i error
+# Check if Grafana datasource is configured
+# In Grafana: Configuration → Data Sources → Prometheus
 ```
 
-**Solution:** Verify the Prometheus datasource is configured correctly in Grafana (Configuration → Data Sources → Prometheus → Test).
+**Solution:** Verify Prometheus datasource in Grafana points to the user workload Prometheus instance.
 
-### Pods Not Starting
+### User Workload Monitoring Not Enabled
 
-**Symptom:** Pods stuck in Pending or CrashLoopBackOff
+**Symptom:** No prometheus-user-workload pods
 
 ```bash
-# Check pod status and events
-oc get pods -n observability
-oc describe pod <pod-name> -n observability
+# Check cluster monitoring config
+oc get configmap cluster-monitoring-config -n openshift-monitoring -o yaml
 
-# Check for SCC issues (common in OpenShift)
-oc get events -n observability --sort-by='.lastTimestamp' | grep -i "scc\|security"
+# Check for errors
+oc get events -n openshift-user-workload-monitoring --sort-by='.lastTimestamp'
 ```
 
-**Solution:** The provided configurations are SCC-compatible. If issues persist, check that the `observability` namespace has proper permissions.
+**Solution:** Ensure `enableUserWorkload: true` is set in the cluster-monitoring-config ConfigMap (see step 1).
 
-### Storage Issues
+### Permission Denied
 
-**Symptom:** PVCs stuck in Pending state
+**Symptom:** Cannot create ServiceMonitors or access Grafana
 
 ```bash
-# Check PVC status
-oc get pvc -n observability
-oc describe pvc <pvc-name> -n observability
-
-# Verify storage class exists
-oc get storageclass
+# Check your permissions
+oc auth can-i create servicemonitor -n consul
+oc auth can-i get configmap -n openshift-monitoring
 ```
 
-**Solution:** Update the storage class in `openshift/prometheus-values.yaml` and `openshift/grafana-values.yaml` to match an available storage class in your cluster.
-
-## Optional: Deploy Demo Application
-
-To generate sample metrics, deploy the HashiCups demo application:
+**Solution:** You need `monitoring-edit` role or cluster-admin. Ask your cluster administrator to grant permissions:
 
 ```bash
-# Create demo namespace
-oc new-project hashicups-demo
-
-# Label for Consul injection
-oc label namespace hashicups-demo consul.hashicorp.com/connect-inject=enabled
-
-# Deploy HashiCups services (adapt manifests for OpenShift if needed)
-# Note: Original manifests may need SCC adjustments
-oc apply -f openshift/hashicups/ -n hashicups-demo
-
-# Wait for pods to be ready
-oc wait --for=condition=ready pod --all -n hashicups-demo --timeout=300s
-
-# Create route to access frontend
-oc expose svc frontend -n hashicups-demo
-oc get route frontend -n hashicups-demo
+# Grant monitoring-edit to a user
+oc adm policy add-role-to-user monitoring-edit <username> -n consul
 ```
 
-## Configuration Files
+## Advanced Configuration
 
-All configuration files are in the `openshift/` directory:
+### Adjust Scrape Interval
 
-- **`prometheus-values.yaml`** - Prometheus Helm values optimized for OpenShift
-- **`grafana-values.yaml`** - Grafana Helm values with pre-configured dashboards
-- **`routes/prometheus-route.yaml`** - OpenShift Route for Prometheus
-- **`routes/grafana-route.yaml`** - OpenShift Route for Grafana
+Edit the ServiceMonitor to change how often metrics are collected:
 
-Key configurations:
+```bash
+oc edit servicemonitor consul-server -n consul
 
+# Change interval from 30s to 15s:
+spec:
+  endpoints:
+  - port: http
+    path: /v1/agent/metrics
+    params:
+      format: ['prometheus']
+    interval: 15s  # Changed from 30s
+```
+
+### Add Custom Labels
+
+Add labels to metrics for better filtering:
+
+```bash
+oc edit servicemonitor consul-server -n consul
+
+# Add relabeling:
+spec:
+  endpoints:
+  - port: http
+    path: /v1/agent/metrics
+    params:
+      format: ['prometheus']
+    interval: 30s
+    relabelings:
+    - sourceLabels: [__meta_kubernetes_pod_name]
+      targetLabel: pod
+    - sourceLabels: [__meta_kubernetes_namespace]
+      targetLabel: namespace
+```
+
+### Configure Retention
+
+User workload monitoring retention is configured cluster-wide:
+
+```bash
+# Edit user workload monitoring config
+cat <<EOF | oc apply -f -
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: user-workload-monitoring-config
+  namespace: openshift-user-workload-monitoring
+data:
+  config.yaml: |
+    prometheus:
+      retention: 15d  # Default is 24h
+      volumeClaimTemplate:
+        spec:
+          resources:
+            requests:
+              storage: 40Gi  # Default is 10Gi
+EOF
+```
+
+## ServiceMonitor Configuration Files
+
+For easier management, you can save ServiceMonitors as files:
+
+**openshift/servicemonitor-consul-server.yaml:**
 ```yaml
-# Prometheus: 20Gi storage, 15-day retention
-server:
-  persistentVolume:
-    enabled: true
-    storageClass: "gp3-csi"
-    size: 20Gi
-  retention: "15d"
-
-# Grafana: 10Gi storage, auto-load dashboards
-persistence:
-  enabled: true
-  storageClass: "gp3-csi"
-  size: 10Gi
-dashboardProviders:
-  dashboardproviders.yaml:
-    providers:
-    - name: 'consul'
-      folder: 'Consul'
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: consul-server
+  namespace: consul
+  labels:
+    app: consul
+spec:
+  selector:
+    matchLabels:
+      app: consul
+      component: server
+  endpoints:
+  - port: http
+    path: /v1/agent/metrics
+    params:
+      format: ['prometheus']
+    interval: 30s
 ```
 
-## Customization
-
-### Adjust Storage Size
-
-Edit the Helm values files:
-
-```bash
-# For Prometheus
-vim openshift/prometheus-values.yaml
-# Change: server.persistentVolume.size
-
-# For Grafana
-vim openshift/grafana-values.yaml
-# Change: persistence.size
-
-# Upgrade deployments
-helm upgrade prometheus prometheus-community/prometheus -n observability -f openshift/prometheus-values.yaml
-helm upgrade grafana grafana/grafana -n observability -f openshift/grafana-values.yaml
+**openshift/servicemonitor-consul-sidecars.yaml:**
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: consul-connect-injected
+  namespace: consul
+  labels:
+    app: consul
+spec:
+  selector:
+    matchLabels:
+      consul.hashicorp.com/connect-inject-status: "injected"
+  endpoints:
+  - port: envoy-metrics
+    path: /stats/prometheus
+    interval: 30s
+  namespaceSelector:
+    any: true
 ```
 
-### Change Retention Period
-
+Apply them:
 ```bash
-# Edit Prometheus values
-vim openshift/prometheus-values.yaml
-# Change: server.retention (e.g., "30d" for 30 days)
-
-# Upgrade Prometheus
-helm upgrade prometheus prometheus-community/prometheus -n observability -f openshift/prometheus-values.yaml
+oc apply -f openshift/servicemonitor-consul-server.yaml
+oc apply -f openshift/servicemonitor-consul-sidecars.yaml
 ```
 
-### Add Custom Dashboards
+## Useful Prometheus Queries
 
-```bash
-# Place dashboard JSON files in dashboards/ directory
-# Update grafana-values.yaml to include them:
-dashboards:
-  consul:
-    consul-data-plane-health:
-      file: dashboards/consul-data-plane-health.json
-    consul-data-plane-performance:
-      file: dashboards/consul-data-plane-performance.json
-    my-custom-dashboard:
-      file: dashboards/my-custom-dashboard.json
+Access Prometheus UI via: **Observe → Metrics** in OpenShift Console
 
-# Upgrade Grafana
-helm upgrade grafana grafana/grafana -n observability -f openshift/grafana-values.yaml
+### Consul Health Queries
+
+```promql
+# Number of healthy services
+count(consul_health_service_query{status="passing"})
+
+# Services with critical health
+consul_health_service_query{status="critical"}
+
+# Consul leader status
+consul_raft_leader
+
+# Number of Consul peers
+consul_raft_peers
+```
+
+### Envoy Proxy Queries
+
+```promql
+# Request rate per service
+rate(envoy_cluster_upstream_rq_total[5m])
+
+# Request latency P95
+histogram_quantile(0.95, rate(envoy_cluster_upstream_rq_time_bucket[5m]))
+
+# Error rate
+rate(envoy_cluster_upstream_rq{envoy_response_code=~"5.."}[5m])
+
+# Active connections
+envoy_cluster_upstream_cx_active
+```
+
+### Service Mesh Queries
+
+```promql
+# Total requests between services
+sum(rate(envoy_cluster_upstream_rq_total[5m])) by (envoy_cluster_name)
+
+# Service-to-service latency
+histogram_quantile(0.99, 
+  sum(rate(envoy_cluster_upstream_rq_time_bucket[5m])) by (le, envoy_cluster_name)
+)
 ```
 
 ## Next Steps
 
-1. **Explore Dashboards:** Familiarize yourself with the pre-loaded Consul dashboards
-2. **Set Up Alerts:** Configure Prometheus alerts for critical metrics
-3. **Customize Views:** Create custom dashboards for your specific services
-4. **Configure Backup:** Set up backup for Grafana dashboards and Prometheus data
-5. **Enable Authentication:** Integrate Grafana with LDAP/OAuth for team access
-6. **Monitor Production:** Deploy monitoring to production namespaces
+1. **Explore Dashboards:** Familiarize yourself with the Consul dashboards in Grafana
+2. **Create Alerts:** Set up PrometheusRules for critical metrics
+3. **Customize Dashboards:** Create custom views for your specific services
+4. **Monitor Production:** Apply ServiceMonitors to production namespaces
+5. **Set Up Notifications:** Configure AlertManager for alert notifications
+
+## Creating Alerts
+
+Create PrometheusRule resources for alerting:
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: consul-alerts
+  namespace: consul
+spec:
+  groups:
+  - name: consul
+    interval: 30s
+    rules:
+    - alert: ConsulServiceUnhealthy
+      expr: consul_health_service_query{status="critical"} > 0
+      for: 5m
+      labels:
+        severity: warning
+      annotations:
+        summary: "Consul service {{ $labels.service_name }} is unhealthy"
+        description: "Service {{ $labels.service_name }} has been in critical state for more than 5 minutes"
+    
+    - alert: ConsulHighErrorRate
+      expr: rate(envoy_cluster_upstream_rq{envoy_response_code=~"5.."}[5m]) > 0.05
+      for: 5m
+      labels:
+        severity: critical
+      annotations:
+        summary: "High error rate for {{ $labels.envoy_cluster_name }}"
+        description: "Error rate is {{ $value }} for cluster {{ $labels.envoy_cluster_name }}"
+```
+
+Apply the alert:
+```bash
+oc apply -f openshift/prometheus-rule-consul.yaml
+```
 
 ## Cleanup
 
-To remove the monitoring stack (does not affect Consul):
+To remove Consul monitoring (does not affect Consul itself):
 
 ```bash
-# Remove Grafana
-helm uninstall grafana -n observability
+# Remove ServiceMonitors
+oc delete servicemonitor consul-server -n consul
+oc delete servicemonitor consul-client -n consul
+oc delete servicemonitor consul-connect-injected -n consul
 
-# Remove Prometheus
-helm uninstall prometheus -n observability
+# Remove PrometheusRules (if created)
+oc delete prometheusrule consul-alerts -n consul
 
-# Delete routes
-oc delete -f openshift/routes/
-
-# Delete namespace (removes PVCs)
-oc delete project observability
-
-# Optional: Remove demo app
-oc delete project hashicups-demo
+# Note: This does NOT disable user workload monitoring or remove dashboards
+# Dashboards remain in Grafana and can be manually deleted
 ```
 
 ## Resources
 
-- **Consul Telemetry:** https://developer.hashicorp.com/consul/docs/agent/telemetry
-- **Prometheus Documentation:** https://prometheus.io/docs/
-- **Grafana Dashboards:** https://grafana.com/grafana/dashboards/
 - **OpenShift Monitoring:** https://docs.openshift.com/container-platform/latest/monitoring/
+- **Consul Telemetry:** https://developer.hashicorp.com/consul/docs/agent/telemetry
+- **ServiceMonitor API:** https://prometheus-operator.dev/docs/operator/api/#monitoring.coreos.com/v1.ServiceMonitor
+- **Prometheus Queries:** https://prometheus.io/docs/prometheus/latest/querying/basics/
 
 ## Repository Structure
 
 ```
 .
-├── README.md                           # This file
-├── dashboards/                         # Grafana dashboard JSON files
+├── README.md                                    # This file
+├── dashboards/                                  # Grafana dashboard JSON files
 │   ├── consul-data-plane-health.json
 │   └── consul-data-plane-performance.json
-└── openshift/                          # OpenShift deployment files
-    ├── prometheus-values.yaml          # Prometheus Helm values
-    ├── grafana-values.yaml             # Grafana Helm values
-    └── routes/                         # OpenShift Routes
-        ├── prometheus-route.yaml
-        └── grafana-route.yaml
+└── openshift/                                   # OpenShift configuration files
+    ├── servicemonitor-consul-server.yaml        # ServiceMonitor for Consul servers
+    ├── servicemonitor-consul-sidecars.yaml      # ServiceMonitor for Envoy sidecars
+    └── prometheus-rule-consul.yaml              # Example alert rules
 ```
 
 ---
 
-**Ready to get started?** Follow the Quick Start guide above to deploy monitoring in 70 minutes! 🚀
+**Ready to get started?** Follow the Quick Start guide above to enable monitoring in 30 minutes! 🚀
