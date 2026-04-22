@@ -9,13 +9,25 @@ global:
 server:
   enabled: true
   
-  # OpenShift: Remove securityContext - handled by SCCs
-  # The restricted-v2 SCC will be applied automatically
-  
   podAnnotations:
     "consul.hashicorp.com/connect-inject": "false"
   
   readinessProbeInitialDelay: 0
+  
+  # PodSecurity "restricted" compliance
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    fsGroup: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
   
   # Persistent storage for production
   persistentVolume:
@@ -78,30 +90,61 @@ server:
         - source_labels: [__meta_consul_node]
           target_label: instance
 
+configmapReload:
+  prometheus:
+    # PodSecurity "restricted" compliance
+    containerSecurityContext:
+      allowPrivilegeEscalation: false
+      capabilities:
+        drop:
+          - ALL
+      seccompProfile:
+        type: RuntimeDefault
+
 alertmanager:
   enabled: false
 
+# Node Exporter requires hostNetwork, hostPID, and hostPath volumes which are
+# incompatible with the PodSecurity "restricted" profile. OpenShift's built-in
+# monitoring stack already ships an equivalent Node Exporter, so disable it here
+# to avoid PodSecurity warnings. If you need a standalone node exporter, grant
+# its ServiceAccount the "privileged" SCC:
+#   oc adm policy add-scc-to-user privileged -z prometheus-node-exporter -n observability
 nodeExporter:
-  enabled: true
-  podAnnotations:
-    "consul.hashicorp.com/connect-inject": "false"
-  # OpenShift: Remove securityContext
-  resources:
-    limits:
-      cpu: 200m
-      memory: 256Mi
-    requests:
-      cpu: 100m
-      memory: 128Mi
+  enabled: false
 
 pushgateway:
   enabled: false
+  # PodSecurity "restricted" compliance (applies if re-enabled)
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    fsGroup: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
 
 kube-state-metrics:
   enabled: true
   podAnnotations:
     "consul.hashicorp.com/connect-inject": "false"
-  # OpenShift: Remove securityContext
+  # PodSecurity "restricted" compliance
+  podSecurityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop:
+        - ALL
+    seccompProfile:
+      type: RuntimeDefault
   resources:
     limits:
       cpu: 200m
@@ -114,8 +157,7 @@ serviceAccounts:
   alertmanager:
     create: false
   nodeExporter:
-    create: true
-    annotations: {}
+    create: false
   pushgateway:
     create: false
   server:

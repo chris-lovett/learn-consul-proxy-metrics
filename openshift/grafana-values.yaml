@@ -45,8 +45,20 @@ podLabels:
 podAnnotations:
   "consul.hashicorp.com/connect-inject": "false"
 
-# OpenShift: Remove securityContext - handled by SCCs
-# The restricted-v2 SCC will be applied automatically
+# PodSecurity "restricted" compliance
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 472
+  runAsGroup: 472
+  fsGroup: 472
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
 
 # Service configuration - ClusterIP for internal access
 service:

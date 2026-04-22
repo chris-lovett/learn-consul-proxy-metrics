@@ -173,9 +173,9 @@ The dashboards should immediately show metrics from your Consul deployment.
 
 ### Prometheus Stack
 - **Prometheus Server:** Metrics collection and storage (20Gi persistent volume, 15-day retention)
-- **Node Exporter:** Host-level metrics from OpenShift nodes
 - **Kube State Metrics:** Kubernetes object metrics
 - **OpenShift Route:** Internal HTTPS access to Prometheus UI
+- **Note:** Node Exporter is disabled by default — OpenShift's built-in monitoring stack already ships an equivalent. See `openshift/prometheus-values.yaml` for re-enable instructions.
 
 ### Grafana Stack
 - **Grafana Server:** Metrics visualization (10Gi persistent volume)
@@ -184,7 +184,8 @@ The dashboards should immediately show metrics from your Consul deployment.
 - **OpenShift Route:** Internal HTTPS access to Grafana UI
 
 ### Configuration Features
-- ✅ **OpenShift Compatible:** No security context conflicts with SCCs
+- ✅ **PodSecurity Compliant:** Security contexts set on all containers (`allowPrivilegeEscalation=false`, `capabilities.drop=ALL`, `seccompProfile=RuntimeDefault`)
+- ✅ **OpenShift Compatible:** Compatible with both SCCs and PodSecurity admission
 - ✅ **Persistent Storage:** Data survives pod restarts
 - ✅ **Internal Access:** Routes with TLS edge termination
 - ✅ **Production Ready:** Authentication enabled, proper RBAC
