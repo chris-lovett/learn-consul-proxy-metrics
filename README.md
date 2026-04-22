@@ -1,65 +1,95 @@
-# Consul Proxy Metrics Monitoring on OpenShift
+# Consul Proxy Metrics Monitoring on OpenShift (ROSA)
 
-Monitor Consul service mesh health and performance using OpenShift's built-in monitoring stack.
+Monitor Consul service mesh health and performance using OpenShift's built-in monitoring stack on ROSA (Red Hat OpenShift Service on AWS).
 
 ## Overview
 
-OpenShift ships with a comprehensive monitoring stack (Prometheus and Grafana) that you can extend to monitor your Consul service mesh. This guide shows you how to configure the built-in monitoring to collect and visualize Consul proxy metrics, giving you insights into:
+Rather than deploying a separate Prometheus and Grafana stack, this guide uses OpenShift's **built-in user workload monitoring** — which ships with ROSA and is already production-ready. This avoids the SCC (Security Context Constraint) conflicts that occur when deploying community Helm charts on OpenShift.
 
-- **Service Health:** Real-time health status of all services
-- **Proxy Performance:** Envoy sidecar metrics including request rates, latency, and throughput
-- **Network Traffic:** Upstream/downstream communication patterns
-- **Error Tracking:** Error rates and failure patterns across your mesh
+You will configure Prometheus to scrape Consul proxy (Envoy) metrics from your service mesh sidecars on port `20200`, and verify data is flowing before moving on to Grafana dashboards.
 
-## Why Use Built-in Monitoring?
+**What you'll gain visibility into:**
+- **Proxy Health:** Envoy sidecar connection status and error rates
+- **Request Rates:** Upstream/downstream traffic per service
+- **Latency Percentiles:** P50, P95, P99 response times across your mesh
+- **Network Traffic:** Bytes sent/received per service
+- **Consul Dataplane:** Connection status, server discovery, and reconnection events
 
-✅ **Already Deployed:** No need to install additional Prometheus/Grafana instances
-✅ **Integrated:** Seamlessly works with OpenShift's monitoring infrastructure
-✅ **Maintained:** Automatically updated with OpenShift
-✅ **Secure:** Uses OpenShift's authentication and RBAC
-✅ **Cost Effective:** No additional storage or compute resources needed
+## Why Use the Built-in Monitoring Stack?
+
+✅ **Already deployed on ROSA** — no additional Helm charts needed  
+✅ **No SCC conflicts** — fully compatible with OpenShift security policies  
+✅ **Production-grade** — HA Prometheus with two replicas and Thanos  
+✅ **Integrated auth** — uses OpenShift RBAC and SSO  
+✅ **Zero extra cost** — no additional storage or compute required  
 
 ## Prerequisites
 
-Before starting, ensure you have:
+- ROSA or OpenShift 4.x cluster
+- Consul Enterprise or OSS deployed via Helm in the `consul` namespace
+- At least one application namespace with Consul sidecar injection enabled (`consul.hashicorp.com/connect-inject=true`)
+- CLI tools: `oc`, `helm >= 3.x`
+- Cluster-admin access
 
-- ✅ **OpenShift Cluster:** ROSA or any OpenShift 4.x cluster
-- ✅ **Consul Deployed:** Consul Enterprise or OSS already running
-- ✅ **CLI Tools:** `oc` (OpenShift CLI)
-- ✅ **Cluster Access:** Cluster-admin or monitoring-edit permissions
-- ✅ **User Workload Monitoring:** Enabled (we'll verify this)
+## Architecture
 
-### Verify Your Environment
-
-```bash
-# Check OpenShift connection
-oc whoami
-oc cluster-info
-
-# Check Consul is running
-oc get pods -n consul
-oc get svc -n consul
-
-# Verify Consul version
-oc get pods -n consul -l app=consul -o jsonpath='{.items[0].spec.containers[0].image}'
-
-# Check if user workload monitoring is enabled
-oc get configmap cluster-monitoring-config -n openshift-monitoring -o yaml
+```
+┌─────────────────────────────────────────────────────┐
+│                  OpenShift Cluster                   │
+│                                                      │
+│  ┌─────────────────────────────────────────────┐    │
+│  │     openshift-user-workload-monitoring       │    │
+│  │  ┌──────────────────┐  ┌─────────────────┐  │    │
+│  │  │ prometheus-user- │  │  thanos-ruler   │  │    │
+│  │  │   workload (x2)  │  │     (x2)        │  │    │
+│  │  └────────┬─────────┘  └─────────────────┘  │    │
+│  └───────────┼─────────────────────────────────┘    │
+│              │ scrapes port 20200                    │
+│              ▼                                       │
+│  ┌───────────────────────────────────────────┐      │
+│  │              demo namespace               │      │
+│  │  ┌──────────────────────────────────────┐ │      │
+│  │  │  app pod                             │ │      │
+│  │  │  ┌────────────┐  ┌────────────────┐  │ │      │
+│  │  │  │  app       │  │ consul-        │  │ │      │
+│  │  │  │  container │  │ dataplane      │  │ │      │
+│  │  │  │            │  │ :20200/metrics │  │ │      │
+│  │  │  └────────────┘  └────────────────┘  │ │      │
+│  │  └──────────────────────────────────────┘ │      │
+│  └───────────────────────────────────────────┘      │
+└─────────────────────────────────────────────────────┘
 ```
 
-## Quick Start (30 minutes)
+## Step 1 — Verify Your Environment (5 min)
 
-### 1. Enable User Workload Monitoring (5 min)
+```bash
+# Confirm you're connected and have cluster-admin
+oc whoami
 
-OpenShift's monitoring stack has two components:
-- **Platform monitoring:** Monitors OpenShift itself (already enabled)
-- **User workload monitoring:** Monitors your applications (needs to be enabled)
+# Confirm Consul is running
+oc get pods -n consul
+
+# Confirm your app namespace has sidecar injection enabled
+oc get namespaces -l consul.hashicorp.com/connect-inject=true
+
+# Confirm app pods have sidecars (look for 2/2 READY)
+oc get pods -n <your-app-namespace>
+```
+
+Pods showing `2/2` in the READY column confirms the `consul-dataplane` sidecar is injected and running alongside your application container.
+
+## Step 2 — Enable User Workload Monitoring (5 min)
+
+ROSA's user workload monitoring must be enabled before you can scrape app metrics.
 
 ```bash
 # Check if already enabled
 oc get configmap cluster-monitoring-config -n openshift-monitoring -o yaml | grep enableUserWorkload
+```
 
-# If not enabled, create/update the config
+If `enableUserWorkload: true` is not present, enable it:
+
+```bash
 cat <<EOF | oc apply -f -
 apiVersion: v1
 kind: ConfigMap
@@ -70,558 +100,261 @@ data:
   config.yaml: |
     enableUserWorkload: true
 EOF
+```
 
-# Wait for user workload monitoring pods to start
+Wait for the pods to come up:
+
+```bash
 oc get pods -n openshift-user-workload-monitoring
-
-# Expected pods:
-# - prometheus-operator
-# - prometheus-user-workload (2 replicas)
-# - thanos-ruler (2 replicas)
 ```
 
-### 2. Configure Consul Metrics (10 min)
-
-Ensure Consul is configured to expose metrics:
-
-```bash
-# Check current Consul configuration
-helm get values consul -n consul > /tmp/current-consul-values.yaml
-grep -A 5 "metrics:" /tmp/current-consul-values.yaml
+Expected output:
+```
+NAME                                   READY   STATUS    RESTARTS   AGE
+prometheus-operator-xxx                3/3     Running   0          ...
+prometheus-user-workload-0             6/6     Running   0          ...
+prometheus-user-workload-1             6/6     Running   0          ...
+thanos-ruler-user-workload-0           4/4     Running   0          ...
+thanos-ruler-user-workload-1           4/4     Running   0          ...
 ```
 
-If metrics are not enabled, update Consul:
+## Step 3 — Verify Consul Metrics Are Enabled (5 min)
+
+Check your current Consul Helm values:
 
 ```bash
-cat > /tmp/consul-metrics-addon.yaml <<'EOF'
+helm get values consul -n consul
+```
+
+Look for this block under `global`:
+
+```yaml
 global:
   metrics:
     enabled: true
     enableAgentMetrics: true
-    enableGatewayMetrics: true
-    disableAgentHostName: true
+```
 
+And this under `connectInject`:
+
+```yaml
 connectInject:
   metrics:
     defaultEnabled: true
-    defaultEnableMerging: true
-    defaultPrometheusScrapePort: "20200"
-    defaultPrometheusScrapePath: "/metrics"
-EOF
+```
 
-# Backup current values
-helm get values consul -n consul > /tmp/consul-backup-$(date +%Y%m%d-%H%M%S).yaml
+If `connectInject.metrics.defaultEnabled` is missing or false, enable it:
 
-# Upgrade Consul with metrics enabled
+```bash
 helm upgrade consul hashicorp/consul \
   -n consul \
-  -f /tmp/current-consul-values.yaml \
-  -f /tmp/consul-metrics-addon.yaml \
+  --reuse-values \
+  --set connectInject.metrics.defaultEnabled=true \
+  --set connectInject.metrics.defaultEnableMerging=false \
   --wait
 ```
 
-Verify metrics are accessible:
+> **Note:** After upgrading, existing pods need to be restarted to pick up the new proxy configuration:
+> ```bash
+> kubectl rollout restart deployment -n <your-app-namespace>
+> ```
+
+### Verify the Consul Server Metrics Endpoint
+
+Consul uses TLS and ACLs, so you need a token and the HTTPS port:
 
 ```bash
-# Test Consul server metrics
-oc exec -n consul consul-server-0 -- curl -s http://localhost:8500/v1/agent/metrics?format=prometheus | head -20
+# Get the bootstrap ACL token
+oc get secret consul-bootstrap-acl-token -n consul -o jsonpath='{.data.token}' | base64 -d
+
+# Test the metrics endpoint (replace <token> with the value above)
+oc exec -n consul consul-server-0 -- curl -sk \
+  https://localhost:8501/v1/agent/metrics?format=prometheus \
+  -H "X-Consul-Token: <token>" | head -20
 ```
 
-### 3. Create ServiceMonitor for Consul (5 min)
+You should see Prometheus-formatted metrics output.
 
-ServiceMonitor is a custom resource that tells Prometheus what to scrape:
+### Verify the Proxy Metrics Endpoint
+
+The Envoy sidecar exposes metrics on port `20200`. Verify it's configured:
 
 ```bash
-# Create ServiceMonitor for Consul servers
-cat <<EOF | oc apply -f -
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: consul-server
-  namespace: consul
-  labels:
-    app: consul
-spec:
-  selector:
-    matchLabels:
-      app: consul
-      component: server
-  endpoints:
-  - port: http
-    path: /v1/agent/metrics
-    params:
-      format: ['prometheus']
-    interval: 30s
-EOF
+# Port-forward the Envoy admin interface from one of your app pods
+oc port-forward -n <your-app-namespace> <pod-name> 19000:19000
+```
 
-# Create ServiceMonitor for Consul clients (if applicable)
-cat <<EOF | oc apply -f -
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: consul-client
-  namespace: consul
-  labels:
-    app: consul
-spec:
-  selector:
-    matchLabels:
-      app: consul
-      component: client
-  endpoints:
-  - port: http
-    path: /v1/agent/metrics
-    params:
-      format: ['prometheus']
-    interval: 30s
-EOF
+In a separate terminal:
 
-# Create ServiceMonitor for Envoy sidecars
+```bash
+# Confirm port 20200 is present in the Envoy config
+curl -s http://localhost:19000/config_dump | grep -A 5 "20200"
+```
+
+Then verify metrics are actually flowing:
+
+```bash
+# Port-forward the metrics port directly
+oc port-forward -n <your-app-namespace> <pod-name> 20200:20200
+```
+
+In a separate terminal:
+
+```bash
+curl -s http://localhost:20200/metrics | head -20
+```
+
+You should see output like:
+
+```
+# HELP consul_dataplane_consul_connected This will either be 0 or 1 depending on whether the dataplane is currently connected to a Consul server.
+# TYPE consul_dataplane_consul_connected gauge
+consul_dataplane_consul_connected 1
+```
+
+Kill both port-forwards with `Ctrl+C` once confirmed.
+
+## Step 4 — Create a PodMonitor (5 min)
+
+A `PodMonitor` tells the built-in Prometheus to scrape port `20200` on all pods with Consul sidecars in your app namespace. We use `PodMonitor` (rather than `ServiceMonitor`) because port 20200 is a sidecar port not exposed by the Kubernetes Service.
+
+```bash
 cat <<EOF | oc apply -f -
 apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
+kind: PodMonitor
 metadata:
-  name: consul-connect-injected
-  namespace: consul
+  name: consul-proxy-metrics
+  namespace: <your-app-namespace>
   labels:
-    app: consul
+    release: prometheus
 spec:
-  selector:
-    matchLabels:
-      consul.hashicorp.com/connect-inject-status: "injected"
-  endpoints:
-  - port: envoy-metrics
-    path: /stats/prometheus
-    interval: 30s
   namespaceSelector:
-    any: true
-EOF
-
-# Verify ServiceMonitors are created
-oc get servicemonitor -n consul
-```
-
-### 4. Access Grafana and Import Dashboards (10 min)
-
-OpenShift's Grafana is accessible through the console:
-
-```bash
-# Get the Grafana route
-oc get route grafana -n openshift-monitoring
-
-# Or access via OpenShift Console:
-# Navigate to: Observe → Dashboards
-```
-
-**Import Consul Dashboards:**
-
-1. **Access Grafana:**
-   - OpenShift Console → Observe → Dashboards
-   - Or use the Grafana route URL
-
-2. **Login:**
-   - Use your OpenShift credentials (SSO)
-
-3. **Import Dashboards:**
-   - Click **+** → **Import**
-   - Upload `dashboards/consul-data-plane-health.json`
-   - Select **Prometheus** as data source
-   - Click **Import**
-   - Repeat for `dashboards/consul-data-plane-performance.json`
-
-**Alternative: Import via CLI (if you have Grafana API access):**
-
-```bash
-# Get Grafana route
-GRAFANA_URL=$(oc get route grafana -n openshift-monitoring -o jsonpath='{.spec.host}')
-
-# Get auth token (requires cluster-admin)
-TOKEN=$(oc sa get-token grafana -n openshift-monitoring)
-
-# Import dashboard
-curl -X POST "https://$GRAFANA_URL/api/dashboards/db" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d @dashboards/consul-data-plane-health.json
-```
-
-## What Gets Configured
-
-### ServiceMonitors
-Three ServiceMonitors are created to scrape metrics:
-
-1. **consul-server:** Scrapes Consul server metrics
-   - Endpoint: `/v1/agent/metrics?format=prometheus`
-   - Interval: 30 seconds
-
-2. **consul-client:** Scrapes Consul client metrics (if using clients)
-   - Endpoint: `/v1/agent/metrics?format=prometheus`
-   - Interval: 30 seconds
-
-3. **consul-connect-injected:** Scrapes Envoy sidecar metrics
-   - Endpoint: `/stats/prometheus`
-   - Interval: 30 seconds
-   - Namespace: All namespaces with injected sidecars
-
-### Dashboards
-
-Two comprehensive Grafana dashboards:
-
-1. **Consul Data Plane Health**
-   - Service health status
-   - Proxy health indicators
-   - Connection status
-   - Error rates
-
-2. **Consul Data Plane Performance**
-   - Request rates (RPS)
-   - Latency percentiles (P50, P95, P99)
-   - Throughput metrics
-   - Resource usage
-
-## Verification
-
-Confirm everything is working:
-
-```bash
-# Check ServiceMonitors are created
-oc get servicemonitor -n consul
-
-# Check Prometheus is scraping Consul targets
-# Access Prometheus UI: Observe → Metrics → Prometheus UI
-# Or via CLI:
-oc get route prometheus-k8s -n openshift-monitoring
-
-# Query for Consul metrics
-# In Prometheus UI, try queries like:
-# - consul_health_service_query_count
-# - envoy_cluster_upstream_rq_total
-# - consul_raft_leader
-
-# Check for any scrape errors
-# In Prometheus UI: Status → Targets
-# Look for consul-server, consul-client, and consul-connect-injected targets
-```
-
-## Troubleshooting
-
-### ServiceMonitor Not Scraping
-
-**Symptom:** No Consul metrics in Prometheus
-
-```bash
-# Check ServiceMonitor exists
-oc get servicemonitor -n consul
-
-# Check if services have correct labels
-oc get svc -n consul --show-labels
-
-# Check Prometheus logs
-oc logs -n openshift-user-workload-monitoring prometheus-user-workload-0 -c prometheus
-
-# Verify service endpoints
-oc get endpoints -n consul
-```
-
-**Solution:** Ensure service labels match ServiceMonitor selectors. The ServiceMonitor must be in the same namespace as the services.
-
-### Metrics Not Appearing in Grafana
-
-**Symptom:** Dashboards show "No data"
-
-```bash
-# Test Prometheus query directly
-oc exec -n openshift-user-workload-monitoring prometheus-user-workload-0 -c prometheus -- \
-  wget -qO- 'http://localhost:9090/api/v1/query?query=up{job="consul-server"}'
-
-# Check if Grafana datasource is configured
-# In Grafana: Configuration → Data Sources → Prometheus
-```
-
-**Solution:** Verify Prometheus datasource in Grafana points to the user workload Prometheus instance.
-
-### User Workload Monitoring Not Enabled
-
-**Symptom:** No prometheus-user-workload pods
-
-```bash
-# Check cluster monitoring config
-oc get configmap cluster-monitoring-config -n openshift-monitoring -o yaml
-
-# Check for errors
-oc get events -n openshift-user-workload-monitoring --sort-by='.lastTimestamp'
-```
-
-**Solution:** Ensure `enableUserWorkload: true` is set in the cluster-monitoring-config ConfigMap (see step 1).
-
-### Permission Denied
-
-**Symptom:** Cannot create ServiceMonitors or access Grafana
-
-```bash
-# Check your permissions
-oc auth can-i create servicemonitor -n consul
-oc auth can-i get configmap -n openshift-monitoring
-```
-
-**Solution:** You need `monitoring-edit` role or cluster-admin. Ask your cluster administrator to grant permissions:
-
-```bash
-# Grant monitoring-edit to a user
-oc adm policy add-role-to-user monitoring-edit <username> -n consul
-```
-
-## Advanced Configuration
-
-### Adjust Scrape Interval
-
-Edit the ServiceMonitor to change how often metrics are collected:
-
-```bash
-oc edit servicemonitor consul-server -n consul
-
-# Change interval from 30s to 15s:
-spec:
-  endpoints:
-  - port: http
-    path: /v1/agent/metrics
-    params:
-      format: ['prometheus']
-    interval: 15s  # Changed from 30s
-```
-
-### Add Custom Labels
-
-Add labels to metrics for better filtering:
-
-```bash
-oc edit servicemonitor consul-server -n consul
-
-# Add relabeling:
-spec:
-  endpoints:
-  - port: http
-    path: /v1/agent/metrics
-    params:
-      format: ['prometheus']
-    interval: 30s
-    relabelings:
-    - sourceLabels: [__meta_kubernetes_pod_name]
-      targetLabel: pod
-    - sourceLabels: [__meta_kubernetes_namespace]
-      targetLabel: namespace
-```
-
-### Configure Retention
-
-User workload monitoring retention is configured cluster-wide:
-
-```bash
-# Edit user workload monitoring config
-cat <<EOF | oc apply -f -
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: user-workload-monitoring-config
-  namespace: openshift-user-workload-monitoring
-data:
-  config.yaml: |
-    prometheus:
-      retention: 15d  # Default is 24h
-      volumeClaimTemplate:
-        spec:
-          resources:
-            requests:
-              storage: 40Gi  # Default is 10Gi
+    matchNames:
+      - <your-app-namespace>
+  selector:
+    matchLabels:
+      consul.hashicorp.com/connect-inject-status: injected
+  podMetricsEndpoints:
+    - path: /metrics
+      targetPort: 20200
 EOF
 ```
 
-## ServiceMonitor Configuration Files
+Verify it was created:
 
-For easier management, you can save ServiceMonitors as files:
-
-**openshift/servicemonitor-consul-server.yaml:**
-```yaml
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: consul-server
-  namespace: consul
-  labels:
-    app: consul
-spec:
-  selector:
-    matchLabels:
-      app: consul
-      component: server
-  endpoints:
-  - port: http
-    path: /v1/agent/metrics
-    params:
-      format: ['prometheus']
-    interval: 30s
-```
-
-**openshift/servicemonitor-consul-sidecars.yaml:**
-```yaml
-apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: consul-connect-injected
-  namespace: consul
-  labels:
-    app: consul
-spec:
-  selector:
-    matchLabels:
-      consul.hashicorp.com/connect-inject-status: "injected"
-  endpoints:
-  - port: envoy-metrics
-    path: /stats/prometheus
-    interval: 30s
-  namespaceSelector:
-    any: true
-```
-
-Apply them:
 ```bash
-oc apply -f openshift/servicemonitor-consul-server.yaml
-oc apply -f openshift/servicemonitor-consul-sidecars.yaml
+oc get podmonitor -n <your-app-namespace>
 ```
 
-## Useful Prometheus Queries
+## Step 5 — Verify Prometheus is Scraping (5 min)
 
-Access Prometheus UI via: **Observe → Metrics** in OpenShift Console
+Port-forward to the user workload Prometheus:
 
-### Consul Health Queries
-
-```promql
-# Number of healthy services
-count(consul_health_service_query{status="passing"})
-
-# Services with critical health
-consul_health_service_query{status="critical"}
-
-# Consul leader status
-consul_raft_leader
-
-# Number of Consul peers
-consul_raft_peers
-```
-
-### Envoy Proxy Queries
-
-```promql
-# Request rate per service
-rate(envoy_cluster_upstream_rq_total[5m])
-
-# Request latency P95
-histogram_quantile(0.95, rate(envoy_cluster_upstream_rq_time_bucket[5m]))
-
-# Error rate
-rate(envoy_cluster_upstream_rq{envoy_response_code=~"5.."}[5m])
-
-# Active connections
-envoy_cluster_upstream_cx_active
-```
-
-### Service Mesh Queries
-
-```promql
-# Total requests between services
-sum(rate(envoy_cluster_upstream_rq_total[5m])) by (envoy_cluster_name)
-
-# Service-to-service latency
-histogram_quantile(0.99, 
-  sum(rate(envoy_cluster_upstream_rq_time_bucket[5m])) by (le, envoy_cluster_name)
-)
-```
-
-## Next Steps
-
-1. **Explore Dashboards:** Familiarize yourself with the Consul dashboards in Grafana
-2. **Create Alerts:** Set up PrometheusRules for critical metrics
-3. **Customize Dashboards:** Create custom views for your specific services
-4. **Monitor Production:** Apply ServiceMonitors to production namespaces
-5. **Set Up Notifications:** Configure AlertManager for alert notifications
-
-## Creating Alerts
-
-Create PrometheusRule resources for alerting:
-
-```yaml
-apiVersion: monitoring.coreos.com/v1
-kind: PrometheusRule
-metadata:
-  name: consul-alerts
-  namespace: consul
-spec:
-  groups:
-  - name: consul
-    interval: 30s
-    rules:
-    - alert: ConsulServiceUnhealthy
-      expr: consul_health_service_query{status="critical"} > 0
-      for: 5m
-      labels:
-        severity: warning
-      annotations:
-        summary: "Consul service {{ $labels.service_name }} is unhealthy"
-        description: "Service {{ $labels.service_name }} has been in critical state for more than 5 minutes"
-    
-    - alert: ConsulHighErrorRate
-      expr: rate(envoy_cluster_upstream_rq{envoy_response_code=~"5.."}[5m]) > 0.05
-      for: 5m
-      labels:
-        severity: critical
-      annotations:
-        summary: "High error rate for {{ $labels.envoy_cluster_name }}"
-        description: "Error rate is {{ $value }} for cluster {{ $labels.envoy_cluster_name }}"
-```
-
-Apply the alert:
 ```bash
-oc apply -f openshift/prometheus-rule-consul.yaml
+oc port-forward -n openshift-user-workload-monitoring prometheus-user-workload-0 9090:9090
+```
+
+Open **http://localhost:9090/targets** in your browser. You should see one target per app pod (e.g., 3 targets for a 3-service app), all in `UP` state under `demo/consul-proxy-metrics`.
+
+Then go to **http://localhost:9090/graph** and run a test query:
+
+```
+consul_dataplane_consul_connected
+```
+
+You should see a value of `1` for each pod, confirming all sidecars are connected to Consul.
+
+Other useful queries to try:
+
+```promql
+# Dataplane connect duration
+consul_dataplane_connect_duration_sum
+
+# Connection errors
+consul_dataplane_connection_errors
+
+# Envoy upstream requests (if L7 traffic is flowing)
+envoy_cluster_upstream_rq_total
 ```
 
 ## Cleanup
 
-To remove Consul monitoring (does not affect Consul itself):
+To remove only the monitoring configuration (does not affect Consul or your apps):
 
 ```bash
-# Remove ServiceMonitors
-oc delete servicemonitor consul-server -n consul
-oc delete servicemonitor consul-client -n consul
-oc delete servicemonitor consul-connect-injected -n consul
-
-# Remove PrometheusRules (if created)
-oc delete prometheusrule consul-alerts -n consul
-
-# Note: This does NOT disable user workload monitoring or remove dashboards
-# Dashboards remain in Grafana and can be manually deleted
+# Remove the PodMonitor
+oc delete podmonitor consul-proxy-metrics -n <your-app-namespace>
 ```
 
-## Resources
+To disable user workload monitoring (only if you enabled it in this guide and don't need it):
 
-- **OpenShift Monitoring:** https://docs.openshift.com/container-platform/latest/monitoring/
-- **Consul Telemetry:** https://developer.hashicorp.com/consul/docs/agent/telemetry
-- **ServiceMonitor API:** https://prometheus-operator.dev/docs/operator/api/#monitoring.coreos.com/v1.ServiceMonitor
-- **Prometheus Queries:** https://prometheus.io/docs/prometheus/latest/querying/basics/
+```bash
+oc edit configmap cluster-monitoring-config -n openshift-monitoring
+# Remove or set: enableUserWorkload: false
+```
+
+## Troubleshooting
+
+### Consul metrics endpoint returns "Permission denied"
+
+Consul ACLs are enabled. You must pass a valid token:
+
+```bash
+oc get secret consul-bootstrap-acl-token -n consul -o jsonpath='{.data.token}' | base64 -d
+```
+
+Use the token in your curl request with `-H "X-Consul-Token: <token>"`.
+
+### curl not found in pod containers
+
+The `consul-dataplane` sidecar and many app containers don't include curl. Use port-forwarding from your local machine instead:
+
+```bash
+oc port-forward -n <namespace> <pod-name> 20200:20200
+curl -s http://localhost:20200/metrics | head -20
+```
+
+### Targets not appearing in Prometheus
+
+1. Confirm the PodMonitor selector matches your pod labels:
+   ```bash
+   oc get pods -n <your-app-namespace> --show-labels | grep "connect-inject-status=injected"
+   ```
+
+2. Confirm user workload monitoring is enabled and pods are running:
+   ```bash
+   oc get pods -n openshift-user-workload-monitoring
+   ```
+
+3. Check Prometheus operator logs for errors:
+   ```bash
+   oc logs -n openshift-user-workload-monitoring -l app.kubernetes.io/name=prometheus-operator
+   ```
+
+### No metrics after Consul Helm upgrade
+
+After enabling `connectInject.metrics.defaultEnabled=true`, existing pods must be restarted to receive the updated proxy configuration:
+
+```bash
+oc rollout restart deployment -n <your-app-namespace>
+```
 
 ## Repository Structure
 
 ```
 .
-├── README.md                                    # This file
-├── dashboards/                                  # Grafana dashboard JSON files
+├── README.md                    # This file
+├── dashboards/                  # Grafana dashboard JSON files
 │   ├── consul-data-plane-health.json
 │   └── consul-data-plane-performance.json
-└── openshift/                                   # OpenShift configuration files
-    ├── servicemonitor-consul-server.yaml        # ServiceMonitor for Consul servers
-    ├── servicemonitor-consul-sidecars.yaml      # ServiceMonitor for Envoy sidecars
-    └── prometheus-rule-consul.yaml              # Example alert rules
+└── openshift/                   # OpenShift configuration files
+    └── podmonitor-consul-proxy.yaml  # PodMonitor for Envoy sidecar metrics
 ```
 
----
+## Resources
 
-**Ready to get started?** Follow the Quick Start guide above to enable monitoring in 30 minutes! 🚀
+- [OpenShift User Workload Monitoring](https://docs.openshift.com/container-platform/latest/monitoring/enabling-monitoring-for-user-defined-projects.html)
+- [Consul Telemetry Docs](https://developer.hashicorp.com/consul/docs/agent/telemetry)
+- [Consul on Kubernetes Metrics](https://developer.hashicorp.com/consul/docs/observe/telemetry/k8s)
+- [PodMonitor API Reference](https://prometheus-operator.dev/docs/operator/api/#monitoring.coreos.com/v1.PodMonitor)
+- [Envoy Proxy Statistics](https://www.envoyproxy.io/docs/envoy/latest/operations/stats_overview)
