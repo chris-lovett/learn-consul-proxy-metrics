@@ -1,69 +1,72 @@
-# Consul Proxy Metrics Monitoring on OpenShift
+# Consul Proxy Metrics on OpenShift (ROSA)
 
-Monitor Consul service mesh health and performance using OpenShift's built-in monitoring stack on ROSA (Red Hat OpenShift Service on AWS).
+Monitor Consul service mesh health and performance using OpenShift's built-in monitoring stack — no extra Helm charts required.
 
 ## Overview
 
-Rather than deploying a separate Prometheus and Grafana stack, this guide uses OpenShift's **built-in user workload monitoring** — which ships with ROSA and is already production-ready. This avoids the SCC (Security Context Constraint) conflicts that occur when deploying community Helm charts on OpenShift.
-
-You will configure Prometheus to scrape Consul proxy (Envoy) metrics from your service mesh sidecars on port `20200`, and verify data is flowing before moving on to Grafana dashboards.
+This guide walks you through configuring OpenShift's built-in Prometheus to scrape Consul Envoy sidecar metrics and visualizing them in Grafana. It is written specifically for ROSA (Red Hat OpenShift Service on AWS) and accounts for OpenShift's security requirements, which differ significantly from vanilla Kubernetes.
 
 **What you'll gain visibility into:**
-- **Proxy Health:** Envoy sidecar connection status and error rates
-- **Request Rates:** Upstream/downstream traffic per service
-- **Latency Percentiles:** P50, P95, P99 response times across your mesh
-- **Network Traffic:** Bytes sent/received per service
-- **Consul Dataplane:** Connection status, server discovery, and reconnection events
+- Proxy health and connection status per service
+- Upstream/downstream request rates and error codes
+- Latency percentiles (P50, P95, P99) across your mesh
+- Consul dataplane connection status and server discovery events
 
-## Why Use the Built-in Monitoring Stack?
+## Why Not Just Use the Community Helm Charts?
 
-✅ **Already deployed on ROSA** — no additional Helm charts needed  
-✅ **No SCC conflicts** — fully compatible with OpenShift security policies  
-✅ **Production-grade** — HA Prometheus with two replicas and Thanos  
-✅ **Integrated auth** — uses OpenShift RBAC and SSO  
-✅ **Zero extra cost** — no additional storage or compute required  
+The community `prometheus` and `grafana` Helm charts work well on vanilla Kubernetes but fail on OpenShift due to Security Context Constraint (SCC) conflicts:
+
+- The Grafana chart injects seccomp annotations that OpenShift forbids
+- node-exporter requires `hostNetwork`, `hostPID`, and `hostPath` volumes that are blocked by default
+- Hardcoded UIDs (`472`, `65534`) fall outside the namespace UID range OpenShift assigns
+
+**The solution:** Use what ROSA already provides:
+- **OpenShift user workload monitoring** (built-in Prometheus) for scraping
+- **Grafana Operator** (from OperatorHub) for visualization — it handles SCCs natively
 
 ## Prerequisites
 
-- ROSA or OpenShift 4.x cluster
+- ROSA or OpenShift 4.11+ cluster
 - Consul Enterprise or OSS deployed via Helm in the `consul` namespace
-- At least one application namespace with Consul sidecar injection enabled (`consul.hashicorp.com/connect-inject=true`)
-- CLI tools: `oc`, `helm >= 3.x`
+- At least one application namespace with Consul sidecar injection enabled
+- CLI tools: `oc`, `helm >= 3.x`, `python3`
 - Cluster-admin access
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                  OpenShift Cluster                   │
-│                                                      │
-│  ┌─────────────────────────────────────────────┐    │
-│  │     openshift-user-workload-monitoring       │    │
-│  │  ┌──────────────────┐  ┌─────────────────┐  │    │
-│  │  │ prometheus-user- │  │  thanos-ruler   │  │    │
-│  │  │   workload (x2)  │  │     (x2)        │  │    │
-│  │  └────────┬─────────┘  └─────────────────┘  │    │
-│  └───────────┼─────────────────────────────────┘    │
-│              │ scrapes port 20200                    │
-│              ▼                                       │
-│  ┌───────────────────────────────────────────┐      │
-│  │              demo namespace               │      │
-│  │  ┌──────────────────────────────────────┐ │      │
-│  │  │  app pod                             │ │      │
-│  │  │  ┌────────────┐  ┌────────────────┐  │ │      │
-│  │  │  │  app       │  │ consul-        │  │ │      │
-│  │  │  │  container │  │ dataplane      │  │ │      │
-│  │  │  │            │  │ :20200/metrics │  │ │      │
-│  │  │  └────────────┘  └────────────────┘  │ │      │
-│  │  └──────────────────────────────────────┘ │      │
-│  └───────────────────────────────────────────┘      │
-└─────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────┐
+│                        OpenShift Cluster                      │
+│                                                               │
+│  ┌──────────────────────────────────────────────────────┐    │
+│  │            openshift-user-workload-monitoring         │    │
+│  │   prometheus-user-workload (x2)   thanos-ruler (x2)  │    │
+│  └──────────────────────┬───────────────────────────────┘    │
+│                         │ scrapes :20200/metrics              │
+│                         ▼                                     │
+│  ┌──────────────────────────────────────────────────────┐    │
+│  │                  app namespace (e.g. demo)            │    │
+│  │   ┌────────────────────────────────────────────┐     │    │
+│  │   │  pod: app container + consul-dataplane      │     │    │
+│  │   │                        :20200/metrics       │     │    │
+│  │   └────────────────────────────────────────────┘     │    │
+│  └──────────────────────────────────────────────────────┘    │
+│                                                               │
+│  ┌──────────────────────────────────────────────────────┐    │
+│  │                observability namespace                │    │
+│  │   Grafana Operator ──▶ Grafana ──▶ Thanos Querier    │    │
+│  └──────────────────────────────────────────────────────┘    │
+└──────────────────────────────────────────────────────────────┘
 ```
 
-## Step 1 — Verify Your Environment (5 min)
+---
+
+## Part 1 — Configure Prometheus Scraping
+
+### Step 1 — Verify Your Environment
 
 ```bash
-# Confirm you're connected and have cluster-admin
+# Confirm cluster-admin access
 oc whoami
 
 # Confirm Consul is running
@@ -72,18 +75,17 @@ oc get pods -n consul
 # Confirm your app namespace has sidecar injection enabled
 oc get namespaces -l consul.hashicorp.com/connect-inject=true
 
-# Confirm app pods have sidecars (look for 2/2 READY)
+# Confirm app pods have sidecars — look for 2/2 in the READY column
 oc get pods -n <your-app-namespace>
 ```
 
-Pods showing `2/2` in the READY column confirms the `consul-dataplane` sidecar is injected and running alongside your application container.
+`2/2 Running` confirms the `consul-dataplane` sidecar is injected alongside your app container.
 
-## Step 2 — Enable User Workload Monitoring (5 min)
+### Step 2 — Enable User Workload Monitoring
 
-ROSA's user workload monitoring must be enabled before you can scrape app metrics.
+ROSA ships with user workload monitoring disabled by default. Check if it's already on:
 
 ```bash
-# Check if already enabled
 oc get configmap cluster-monitoring-config -n openshift-monitoring -o yaml | grep enableUserWorkload
 ```
 
@@ -102,7 +104,7 @@ data:
 EOF
 ```
 
-Wait for the pods to come up:
+Wait for the monitoring stack to come up:
 
 ```bash
 oc get pods -n openshift-user-workload-monitoring
@@ -118,7 +120,7 @@ thanos-ruler-user-workload-0           4/4     Running   0          ...
 thanos-ruler-user-workload-1           4/4     Running   0          ...
 ```
 
-## Step 3 — Verify Consul Metrics Are Enabled (5 min)
+### Step 3 — Enable Consul Proxy Metrics
 
 Check your current Consul Helm values:
 
@@ -126,24 +128,7 @@ Check your current Consul Helm values:
 helm get values consul -n consul
 ```
 
-Look for this block under `global`:
-
-```yaml
-global:
-  metrics:
-    enabled: true
-    enableAgentMetrics: true
-```
-
-And this under `connectInject`:
-
-```yaml
-connectInject:
-  metrics:
-    defaultEnabled: true
-```
-
-If `connectInject.metrics.defaultEnabled` is missing or false, enable it:
+Look for `connectInject.metrics.defaultEnabled: true`. If it's missing or false, enable it:
 
 ```bash
 helm upgrade consul hashicorp/consul \
@@ -154,47 +139,29 @@ helm upgrade consul hashicorp/consul \
   --wait
 ```
 
-> **Note:** After upgrading, existing pods need to be restarted to pick up the new proxy configuration:
+> **Note:** Existing pods must be restarted to pick up the new proxy configuration:
 > ```bash
-> kubectl rollout restart deployment -n <your-app-namespace>
+> oc rollout restart deployment -n <your-app-namespace>
 > ```
 
-### Verify the Consul Server Metrics Endpoint
-
-Consul uses TLS and ACLs, so you need a token and the HTTPS port:
+**Verify the Consul server metrics endpoint** (Consul Enterprise uses TLS and ACLs):
 
 ```bash
 # Get the bootstrap ACL token
 oc get secret consul-bootstrap-acl-token -n consul -o jsonpath='{.data.token}' | base64 -d
 
-# Test the metrics endpoint (replace <token> with the value above)
+# Test the metrics endpoint using HTTPS port 8501 (not HTTP 8500)
 oc exec -n consul consul-server-0 -- curl -sk \
   https://localhost:8501/v1/agent/metrics?format=prometheus \
   -H "X-Consul-Token: <token>" | head -20
 ```
 
-You should see Prometheus-formatted metrics output.
+**Verify the Envoy proxy metrics endpoint** on port `20200`:
 
-### Verify the Proxy Metrics Endpoint
-
-The Envoy sidecar exposes metrics on port `20200`. Verify it's configured:
+> **Note:** Most app containers and the `consul-dataplane` sidecar do not include `curl`. Use port-forwarding from your local machine instead.
 
 ```bash
-# Port-forward the Envoy admin interface from one of your app pods
-oc port-forward -n <your-app-namespace> <pod-name> 19000:19000
-```
-
-In a separate terminal:
-
-```bash
-# Confirm port 20200 is present in the Envoy config
-curl -s http://localhost:19000/config_dump | grep -A 5 "20200"
-```
-
-Then verify metrics are actually flowing:
-
-```bash
-# Port-forward the metrics port directly
+# Port-forward to the sidecar metrics port
 oc port-forward -n <your-app-namespace> <pod-name> 20200:20200
 ```
 
@@ -205,18 +172,19 @@ curl -s http://localhost:20200/metrics | head -20
 ```
 
 You should see output like:
-
 ```
-# HELP consul_dataplane_consul_connected This will either be 0 or 1 depending on whether the dataplane is currently connected to a Consul server.
+# HELP consul_dataplane_consul_connected ...
 # TYPE consul_dataplane_consul_connected gauge
 consul_dataplane_consul_connected 1
 ```
 
-Kill both port-forwards with `Ctrl+C` once confirmed.
+Kill the port-forward with `Ctrl+C` once confirmed.
 
-## Step 4 — Create a PodMonitor (5 min)
+### Step 4 — Create a PodMonitor
 
-A `PodMonitor` tells the built-in Prometheus to scrape port `20200` on all pods with Consul sidecars in your app namespace. We use `PodMonitor` (rather than `ServiceMonitor`) because port 20200 is a sidecar port not exposed by the Kubernetes Service.
+A `PodMonitor` tells the built-in Prometheus to scrape port `20200` on all Consul-injected pods.
+
+> **Why PodMonitor instead of ServiceMonitor?** Port `20200` is a sidecar port — it's not exposed by the Kubernetes Service, which only exposes the app port. `PodMonitor` scrapes pods directly and doesn't require a Service port definition.
 
 ```bash
 cat <<EOF | oc apply -f -
@@ -246,170 +214,42 @@ Verify it was created:
 oc get podmonitor -n <your-app-namespace>
 ```
 
-## Step 5 — Verify Prometheus is Scraping (5 min)
+### Step 5 — Verify Prometheus is Scraping
 
-Port-forward to the user workload Prometheus:
+Port-forward to the user workload Prometheus UI:
 
 ```bash
 oc port-forward -n openshift-user-workload-monitoring prometheus-user-workload-0 9090:9090
 ```
 
-Open **http://localhost:9090/targets** in your browser. You should see one target per app pod (e.g., 3 targets for a 3-service app), all in `UP` state under `demo/consul-proxy-metrics`.
+Open **http://localhost:9090/targets** in your browser. You should see one target per app pod in `UP` state listed under `<namespace>/consul-proxy-metrics`.
 
-Then go to **http://localhost:9090/graph** and run a test query:
+Then go to **http://localhost:9090/graph** and run:
 
-```
+```promql
 consul_dataplane_consul_connected
 ```
 
-You should see a value of `1` for each pod, confirming all sidecars are connected to Consul.
+You should see a value of `1` for each pod. Kill the port-forward with `Ctrl+C`.
 
-Other useful queries to try:
+---
 
-```promql
-# Dataplane connect duration
-consul_dataplane_connect_duration_sum
+## Part 2 — Deploy Grafana
 
-# Connection errors
-consul_dataplane_connection_errors
+> **Why the Grafana Operator?** The community Grafana Helm chart injects seccomp annotations that are forbidden by OpenShift's SCCs, preventing pods from scheduling. The Grafana Operator from OperatorHub is OpenShift-native and handles all security requirements automatically.
 
-# Envoy upstream requests (if L7 traffic is flowing)
-envoy_cluster_upstream_rq_total
-```
-
-## Cleanup
-
-To remove only the monitoring configuration (does not affect Consul or your apps):
-
-```bash
-# Remove the PodMonitor
-oc delete podmonitor consul-proxy-metrics -n <your-app-namespace>
-```
-
-To disable user workload monitoring (only if you enabled it in this guide and don't need it):
-
-```bash
-oc edit configmap cluster-monitoring-config -n openshift-monitoring
-# Remove or set: enableUserWorkload: false
-```
-
-## Troubleshooting
-
-### Consul metrics endpoint returns "Permission denied"
-
-Consul ACLs are enabled. You must pass a valid token:
-
-```bash
-oc get secret consul-bootstrap-acl-token -n consul -o jsonpath='{.data.token}' | base64 -d
-```
-
-Use the token in your curl request with `-H "X-Consul-Token: <token>"`.
-
-### curl not found in pod containers
-
-The `consul-dataplane` sidecar and many app containers don't include curl. Use port-forwarding from your local machine instead:
-
-```bash
-oc port-forward -n <namespace> <pod-name> 20200:20200
-curl -s http://localhost:20200/metrics | head -20
-```
-
-### Targets not appearing in Prometheus
-
-1. Confirm the PodMonitor selector matches your pod labels:
-   ```bash
-   oc get pods -n <your-app-namespace> --show-labels | grep "connect-inject-status=injected"
-   ```
-
-2. Confirm user workload monitoring is enabled and pods are running:
-   ```bash
-   oc get pods -n openshift-user-workload-monitoring
-   ```
-
-3. Check Prometheus operator logs for errors:
-   ```bash
-   oc logs -n openshift-user-workload-monitoring -l app.kubernetes.io/name=prometheus-operator
-   ```
-
-### No metrics after Consul Helm upgrade
-
-After enabling `connectInject.metrics.defaultEnabled=true`, existing pods must be restarted to receive the updated proxy configuration:
-
-```bash
-oc rollout restart deployment -n <your-app-namespace>
-```
-
-## Repository Structure
-
-```
-.
-├── README.md                    # This file
-├── dashboards/                  # Grafana dashboard JSON files
-│   ├── consul-data-plane-health.json
-│   └── consul-data-plane-performance.json
-└── openshift/                   # OpenShift configuration files
-    └── podmonitor-consul-proxy.yaml  # PodMonitor for Envoy sidecar metrics
-```
-
-## Resources
-
-- [OpenShift User Workload Monitoring](https://docs.openshift.com/container-platform/latest/monitoring/enabling-monitoring-for-user-defined-projects.html)
-- [Consul Telemetry Docs](https://developer.hashicorp.com/consul/docs/agent/telemetry)
-- [Consul on Kubernetes Metrics](https://developer.hashicorp.com/consul/docs/observe/telemetry/k8s)
-- [PodMonitor API Reference](https://prometheus-operator.dev/docs/operator/api/#monitoring.coreos.com/v1.PodMonitor)
-- [Envoy Proxy Statistics](https://www.envoyproxy.io/docs/envoy/latest/operations/stats_overview)
-
-
-# Grafana Setup for Consul Proxy Metrics on OpenShift 
-
-This guide covers deploying Grafana on OpenShift using the **Grafana Operator** and connecting it to the built-in Thanos Querier to visualize Consul proxy metrics.
-
-> **Why the Grafana Operator?** The community Grafana Helm chart injects seccomp annotations that are forbidden by OpenShift's Security Context Constraints (SCCs), causing pods to fail to schedule. The Grafana Operator is OpenShift-native and handles all SCC requirements automatically.
-
-## Prerequisites
-
-Before starting this section, ensure you have completed:
-- ✅ User workload monitoring enabled (`openshift-user-workload-monitoring` pods running)
-- ✅ PodMonitor created and scraping Consul proxy metrics from your app namespace
-- ✅ Metrics verified in Prometheus UI (`consul_dataplane_consul_connected = 1` for all pods)
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────┐
-│                    observability namespace               │
-│                                                          │
-│  ┌─────────────────┐      ┌──────────────────────────┐  │
-│  │ Grafana Operator│      │    Grafana Instance       │  │
-│  │   (manages)     │─────▶│    grafana-deployment     │  │
-│  └─────────────────┘      └──────────┬───────────────┘  │
-│                                      │ queries           │
-│                                      ▼                   │
-│                         ┌────────────────────────┐       │
-│                         │  Thanos Querier         │       │
-│                         │  (openshift-monitoring) │       │
-│                         └────────────┬───────────┘       │
-│                                      │ federates         │
-│                         ┌────────────▼───────────┐       │
-│                         │  User Workload          │       │
-│                         │  Prometheus             │       │
-│                         │  (scrapes port 20200)   │       │
-│                         └────────────────────────┘       │
-└─────────────────────────────────────────────────────────┘
-```
-
-## Step 1 — Create the observability Namespace (if not already done)
+### Step 6 — Create the observability Namespace
 
 ```bash
 oc new-project observability
 ```
 
-## Step 2 — Install the Grafana Operator via OLM (10 min)
+### Step 7 — Install the Grafana Operator
 
-OpenShift uses the Operator Lifecycle Manager (OLM) to install operators. An `OperatorGroup` is required to tell OLM the target scope for the operator.
+OpenShift uses OLM (Operator Lifecycle Manager) to install operators. An `OperatorGroup` is required before a `Subscription` will work — without it, OLM won't create an InstallPlan.
 
 ```bash
-# Create the OperatorGroup
+# Create the OperatorGroup first
 cat <<EOF | oc apply -f -
 apiVersion: operators.coreos.com/v1
 kind: OperatorGroup
@@ -421,7 +261,7 @@ spec:
     - observability
 EOF
 
-# Create the Subscription to install the Grafana Operator
+# Create the Subscription
 cat <<EOF | oc apply -f -
 apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
@@ -436,33 +276,34 @@ spec:
 EOF
 ```
 
-Wait for the operator to install — this takes 1-2 minutes:
+Wait for the operator to reach `Succeeded` — this takes 1-2 minutes:
 
 ```bash
 oc get csv -n observability --watch
 ```
 
-Wait until you see `PHASE: Succeeded`:
-
+Expected output:
 ```
-NAME                       DISPLAY            VERSION   REPLACES                   PHASE
-grafana-operator.v5.22.2   Grafana Operator   5.22.2    grafana-operator.v5.21.2   Succeeded
+NAME                       DISPLAY            VERSION   PHASE
+grafana-operator.v5.22.2   Grafana Operator   5.22.2    Succeeded
 ```
 
-## Step 3 — Create a Service Account for Grafana (5 min)
+### Step 8 — Create a Service Account for Grafana
 
 Grafana needs a service account with permission to query the Thanos Querier.
+
+> **Important:** Use a `kubernetes.io/service-account-token` secret — not `oc create token`. Projected tokens created with `oc create token` are rejected by the Thanos Querier's RBAC proxy.
 
 ```bash
 # Create the service account
 oc create serviceaccount grafana -n observability
 
-# Grant permission to query cluster metrics via Thanos
+# Grant permission to query cluster metrics
 oc adm policy add-cluster-role-to-user cluster-monitoring-view \
   -z grafana \
   -n observability
 
-# Create a long-lived secret-based token (more reliable than projected tokens for Thanos auth)
+# Create a long-lived secret-based token
 cat <<EOF | oc apply -f -
 apiVersion: v1
 kind: Secret
@@ -474,19 +315,18 @@ metadata:
 type: kubernetes.io/service-account-token
 EOF
 
-# Wait for the token to be populated
+# Wait for the token to be populated, then verify it against Thanos
 sleep 5
-
-# Verify the token works against Thanos
 SA_TOKEN=$(oc get secret grafana-sa-token -n observability -o jsonpath='{.data.token}' | base64 -d)
+THANOS_HOST=$(oc get route thanos-querier -n openshift-monitoring -o jsonpath='{.spec.host}')
 
 curl -k -H "Authorization: Bearer $SA_TOKEN" \
-  "https://thanos-querier-openshift-monitoring.$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')/api/v1/query?query=up" | head -c 200
+  "https://${THANOS_HOST}/api/v1/query?query=up" | head -c 100
 ```
 
-You should see a JSON response with `"status":"success"`. If you see `Unauthorized`, verify the service account has the `cluster-monitoring-view` role.
+You should see `{"status":"success",...}`. If you see `Unauthorized`, verify the `cluster-monitoring-view` role was granted.
 
-## Step 4 — Deploy the Grafana Instance (5 min)
+### Step 9 — Deploy Grafana
 
 ```bash
 cat <<EOF | oc apply -f -
@@ -527,19 +367,11 @@ oc get pods -n observability --watch
 
 Expected output:
 ```
-NAME                                   READY   STATUS    RESTARTS   AGE
-grafana-deployment-xxx                 1/1     Running   0          30s
+NAME                         READY   STATUS    RESTARTS   AGE
+grafana-deployment-xxx       1/1     Running   0          30s
 ```
 
-## Step 5 — Create the Thanos Datasource (5 min)
-
-Get your Thanos Querier URL:
-
-```bash
-oc get route thanos-querier -n openshift-monitoring -o jsonpath='{.spec.host}'
-```
-
-Create the datasource using the service account token:
+### Step 10 — Create the Prometheus Datasource
 
 ```bash
 SA_TOKEN=$(oc get secret grafana-sa-token -n observability -o jsonpath='{.data.token}' | base64 -d)
@@ -570,21 +402,7 @@ spec:
 EOF
 ```
 
-Verify the datasource was created:
-
-```bash
-oc get grafanadatasource -n observability
-```
-
-Expected output:
-```
-NAME                NO MATCHING INSTANCES   LAST RESYNC   AGE
-prometheus-thanos                           30s           31s
-```
-
-> **Important:** Use a secret-based token (`kubernetes.io/service-account-token`) rather than a projected token (`oc create token`). Projected tokens are not accepted by the Thanos Querier's RBAC proxy.
-
-## Step 6 — Expose Grafana with an OpenShift Route (2 min)
+### Step 11 — Expose Grafana with a Route
 
 ```bash
 cat <<EOF | oc apply -f -
@@ -605,56 +423,53 @@ spec:
 EOF
 
 # Get the Grafana URL
-GRAFANA_URL=$(oc get route grafana-route -n observability -o jsonpath='{.spec.host}')
-echo "Grafana URL: https://$GRAFANA_URL"
+echo "https://$(oc get route grafana-route -n observability -o jsonpath='{.spec.host}')"
 ```
 
-Open the URL in your browser and log in with:
-- **Username:** `admin`
-- **Password:** `changeme123`
+Open the URL and log in with `admin` / `changeme123`.
 
-### Verify the Datasource
+Go to **Connections → Data Sources → Prometheus → Save & Test**. You should see:
+```
+Successfully queried the Prometheus API.
+```
 
-1. Go to **Connections → Data Sources → Prometheus**
-2. Click **Save & Test**
-3. You should see: `Successfully queried the Prometheus API`
+---
 
-## Step 7 — Load the Consul Dashboards (10 min)
+## Part 3 — Load the Consul Dashboards
 
-The dashboard JSON files reference a hardcoded Grafana datasource UID (`PBFA97CFB590B2093`) from the original EKS tutorial environment. We need to replace this with our actual datasource UID and fix the hardcoded namespace variable before loading them.
+The dashboard JSON files in `dashboards/` contain two hardcoded values from the original EKS tutorial environment that must be fixed before loading:
 
-### Get Your Datasource UID
+1. A hardcoded datasource UID (`PBFA97CFB590B2093`)
+2. Hardcoded namespace dropdown values (`default, consul`) as a static custom variable
+
+The script below fixes both issues automatically.
+
+### Step 12 — Prepare and Load the Dashboards
 
 ```bash
+# Get your Grafana URL and datasource UID
 GRAFANA_URL=$(oc get route grafana-route -n observability -o jsonpath='{.spec.host}')
 
 DATASOURCE_UID=$(curl -sk "https://$GRAFANA_URL/api/datasources" \
-  -u admin:changeme123 | python3 -m json.tool | grep '"uid"' | head -1 | tr -d ' ",' | cut -d: -f2)
+  -u admin:changeme123 | python3 -m json.tool | grep '"uid"' | head -1 \
+  | tr -d ' ",' | cut -d: -f2)
 
 echo "Datasource UID: $DATASOURCE_UID"
-```
 
-### Prepare the Dashboard JSON Files
-
-```bash
-# Copy dashboard files to a working directory
+# Copy dashboards to a working directory
 cp dashboards/consul-data-plane-health.json /tmp/health-dashboard.json
 cp dashboards/consul-data-plane-performance.json /tmp/performance-dashboard.json
 
-# Replace the hardcoded datasource UID with your actual UID
+# Replace the hardcoded datasource UID
 sed -i '' "s/PBFA97CFB590B2093/${DATASOURCE_UID}/g" /tmp/health-dashboard.json
 sed -i '' "s/PBFA97CFB590B2093/${DATASOURCE_UID}/g" /tmp/performance-dashboard.json
 
-# Fix the hardcoded namespace and app variables to use dynamic label_values queries
-# This allows the dashboards to discover namespaces from actual metrics
+# Fix hardcoded namespace/app variables to be dynamic
 python3 - <<'EOF'
-import json, sys
+import json
 
-for filepath, outpath in [
-    ('/tmp/health-dashboard.json', '/tmp/health-dashboard.json'),
-    ('/tmp/performance-dashboard.json', '/tmp/performance-dashboard.json')
-]:
-    with open(filepath, 'r') as f:
+for path in ['/tmp/health-dashboard.json', '/tmp/performance-dashboard.json']:
+    with open(path, 'r') as f:
         dashboard = json.load(f)
 
     for template in dashboard.get('templating', {}).get('list', []):
@@ -671,17 +486,13 @@ for filepath, outpath in [
             template['options'] = []
             template['current'] = {}
 
-    with open(outpath, 'w') as f:
+    with open(path, 'w') as f:
         json.dump(dashboard, f)
 
-print("Done - both dashboards updated")
+print("Done")
 EOF
-```
 
-### Load Dashboards via ConfigMaps
-
-```bash
-# Create ConfigMaps from the prepared dashboard JSON files
+# Load dashboards as ConfigMaps
 oc create configmap consul-data-plane-health \
   -n observability \
   --from-file=consul-data-plane-health.json=/tmp/health-dashboard.json
@@ -690,7 +501,7 @@ oc create configmap consul-data-plane-performance \
   -n observability \
   --from-file=consul-data-plane-performance.json=/tmp/performance-dashboard.json
 
-# Create GrafanaDashboard resources that reference the ConfigMaps
+# Create GrafanaDashboard resources pointing at the ConfigMaps
 cat <<EOF | oc apply -f -
 apiVersion: grafana.integreatly.org/v1beta1
 kind: GrafanaDashboard
@@ -718,152 +529,185 @@ spec:
     name: consul-data-plane-performance
     key: consul-data-plane-performance.json
 EOF
-
-# Verify dashboards were created and synced
-oc get grafanadashboard -n observability
 ```
 
-Expected output:
-```
-NAME                            NO MATCHING INSTANCES   LAST RESYNC   AGE
-consul-data-plane-health                                30s           31s
-consul-data-plane-performance                           30s           31s
-```
+Wait ~30 seconds, then hard-refresh your browser (`Cmd+Shift+R`) and go to **Dashboards → Browse**.
 
-## Step 8 — Explore the Dashboards
+### Step 13 — Explore the Dashboards
 
-In the Grafana UI, go to **Dashboards → Browse** and open either dashboard.
+Set the **namespace** dropdown to your app namespace (e.g., `demo`). The **app** dropdown will populate automatically based on services in that namespace.
 
-Set the filters:
-- **namespace:** Select your app namespace (e.g., `demo`)
-- **app:** Select `All` or a specific service
+**Data Plane Health** shows mesh-wide health:
+- Running service count
+- Connections rejected per service
+- Upstream/downstream request rates by HTTP status code
 
-### Data Plane Health Dashboard
+**Data Plane Performance** shows performance metrics:
+- Dataplane latency (live graph)
+- Requests active (upstream)
+- Connections rejected over time
+- Latency by throughput
 
-Shows the overall health of your service mesh:
+---
 
-- **Running services** — count of active Consul-connected services
-- **Connections Rejected** — rejected upstream connections per service
-- **Upstream Rq by Status Code** — HTTP request rates broken down by 2xx/3xx/4xx/5xx
-- **Downstream Rq by Status Code** — inbound request status codes
-- **HTTP Status** — overall HTTP traffic health
+## Useful Prometheus Queries
 
-### Data Plane Performance Dashboard
-
-Shows performance metrics across your mesh:
-
-- **Dataplane Latency** — P50/P95/P99 latency across all services
-- **Requests Active (Upstream)** — active upstream connections
-- **Connections Rejected** — connection rejection rates
-- **Latency by Throughput** — latency vs. throughput correlation
-- **Mem/CPU Usage** — resource usage by pod (requires kube-state-metrics)
-
-## Verification
-
-Confirm everything is working end to end:
+Access the Prometheus UI at any time:
 
 ```bash
-# Check all resources are running
-oc get pods -n observability
-oc get grafanadatasource -n observability
-oc get grafanadashboard -n observability
-
-# Confirm metrics are flowing from your app namespace
-SA_TOKEN=$(oc get secret grafana-sa-token -n observability -o jsonpath='{.data.token}' | base64 -d)
-THANOS_HOST=$(oc get route thanos-querier -n openshift-monitoring -o jsonpath='{.spec.host}')
-
-curl -k -H "Authorization: Bearer $SA_TOKEN" \
-  "https://${THANOS_HOST}/api/v1/query?query=consul_dataplane_consul_connected" \
-  | python3 -m json.tool | grep -E '"namespace"|"value"'
+oc port-forward -n openshift-user-workload-monitoring prometheus-user-workload-0 9090:9090
 ```
 
-All pods in your app namespace should show `consul_dataplane_consul_connected = 1`.
+Then open **http://localhost:9090/graph** and try:
+
+```promql
+# Are all sidecars connected to Consul?
+consul_dataplane_consul_connected
+
+# Upstream request rate per service
+rate(envoy_cluster_upstream_rq_total[5m])
+
+# Request errors (5xx) per service
+rate(envoy_cluster_upstream_rq_total{envoy_response_code=~"5.."}[5m])
+
+# P99 latency per service
+histogram_quantile(0.99,
+  rate(envoy_cluster_upstream_rq_time_bucket[5m])
+)
+
+# Active upstream connections
+envoy_cluster_upstream_cx_active
+```
+
+---
 
 ## Cleanup
 
-To remove Grafana and all related resources:
+Remove all monitoring resources without affecting Consul or your apps:
 
 ```bash
-# Remove dashboards
+# Part 1 — PodMonitor
+oc delete podmonitor consul-proxy-metrics -n <your-app-namespace>
+
+# Part 2 — Grafana
 oc delete grafanadashboard consul-data-plane-health consul-data-plane-performance -n observability
-
-# Remove datasource
 oc delete grafanadatasource prometheus-thanos -n observability
-
-# Remove Grafana instance
 oc delete grafana grafana -n observability
-
-# Remove the operator
 oc delete subscription grafana-operator -n observability
 oc delete csv grafana-operator.v5.22.2 -n observability
-
-# Remove ConfigMaps
 oc delete configmap consul-data-plane-health consul-data-plane-performance -n observability
-
-# Remove service account and token
 oc delete secret grafana-sa-token -n observability
 oc delete serviceaccount grafana -n observability
-
-# Remove route
 oc delete route grafana-route -n observability
-
-# Remove OperatorGroup (only if no other operators in this namespace)
 oc delete operatorgroup observability-operatorgroup -n observability
+
+# Optionally delete the namespace entirely
+oc delete project observability
 ```
+
+---
 
 ## Troubleshooting
 
-### 401 Unauthorized on Datasource Test
+### "Permission denied: anonymous token lacks permission 'agent:read'"
 
-The token type matters. Use a secret-based token, not a projected token:
-
-```bash
-# Verify your token type
-oc get secret grafana-sa-token -n observability -o jsonpath='{.type}'
-# Should output: kubernetes.io/service-account-token
-
-# Test the token directly against Thanos
-SA_TOKEN=$(oc get secret grafana-sa-token -n observability -o jsonpath='{.data.token}' | base64 -d)
-THANOS_HOST=$(oc get route thanos-querier -n openshift-monitoring -o jsonpath='{.spec.host}')
-curl -k -H "Authorization: Bearer $SA_TOKEN" "https://${THANOS_HOST}/api/v1/query?query=up" | head -c 100
-```
-
-### Namespace Dropdown Only Shows `default` and `consul`
-
-The dashboard JSON has hardcoded namespace values. Re-run the Python script from Step 7 to fix the variable queries and re-apply the ConfigMaps.
-
-### Datasource UID Error in Dashboards
-
-The original dashboard JSON references `PBFA97CFB590B2093` — a hardcoded UID from the EKS tutorial environment. Run the `sed` replacement from Step 7 to replace it with your actual datasource UID.
-
-### No Data in Panels After Setting Namespace
-
-Verify metrics exist for your namespace in Thanos:
+Consul ACLs are enabled. Use HTTPS port `8501` and pass a token:
 
 ```bash
-SA_TOKEN=$(oc get secret grafana-sa-token -n observability -o jsonpath='{.data.token}' | base64 -d)
-THANOS_HOST=$(oc get route thanos-querier -n openshift-monitoring -o jsonpath='{.spec.host}')
-
-curl -k -H "Authorization: Bearer $SA_TOKEN" \
-  "https://${THANOS_HOST}/api/v1/query?query=envoy_cluster_upstream_rq_total{namespace=\"<your-namespace>\"}" \
-  | python3 -m json.tool | head -30
+oc get secret consul-bootstrap-acl-token -n consul -o jsonpath='{.data.token}' | base64 -d
 ```
 
-If this returns results, data is flowing and the issue is the dashboard variable configuration. If it returns empty results, check your PodMonitor is correctly targeting the pods.
+Then pass `-H "X-Consul-Token: <token>"` in your curl request.
 
-### Grafana Operator CSV Stuck in Installing
+### curl not found in pod containers
 
-An `OperatorGroup` is required. Check:
+Neither `consul-dataplane` nor most app containers include `curl`. Use port-forwarding instead:
+
+```bash
+oc port-forward -n <namespace> <pod-name> 20200:20200
+curl -s http://localhost:20200/metrics | head -20
+```
+
+### PodMonitor targets not appearing in Prometheus
+
+1. Confirm pods have the expected label:
+   ```bash
+   oc get pods -n <your-app-namespace> --show-labels | grep "connect-inject-status=injected"
+   ```
+2. Confirm user workload monitoring is running:
+   ```bash
+   oc get pods -n openshift-user-workload-monitoring
+   ```
+3. Check Prometheus operator logs:
+   ```bash
+   oc logs -n openshift-user-workload-monitoring -l app.kubernetes.io/name=prometheus-operator
+   ```
+
+### Grafana Operator CSV stuck in Installing
+
+The `OperatorGroup` is missing. Create it first, then delete and recreate the Subscription:
 
 ```bash
 oc get operatorgroup -n observability
 ```
 
-If missing, create it (see Step 2) then delete and recreate the Subscription.
+See Step 7 for the OperatorGroup manifest.
+
+### 401 Unauthorized on Grafana datasource test
+
+Verify you are using a secret-based token, not a projected token:
+
+```bash
+oc get secret grafana-sa-token -n observability -o jsonpath='{.type}'
+# Must be: kubernetes.io/service-account-token
+```
+
+Test the token directly:
+
+```bash
+SA_TOKEN=$(oc get secret grafana-sa-token -n observability -o jsonpath='{.data.token}' | base64 -d)
+THANOS_HOST=$(oc get route thanos-querier -n openshift-monitoring -o jsonpath='{.spec.host}')
+curl -k -H "Authorization: Bearer $SA_TOKEN" "https://${THANOS_HOST}/api/v1/query?query=up" | head -c 100
+```
+
+### Namespace dropdown only shows `default` and `consul`
+
+The dashboard JSON has hardcoded namespace values. Re-run the Python script from Step 12 and reapply the ConfigMaps.
+
+### "Datasource PBFA97CFB590B2093 was not found"
+
+The dashboard JSON has a hardcoded datasource UID from the original EKS tutorial. Re-run the `sed` replacement from Step 12.
+
+### No metrics after Consul Helm upgrade
+
+Restart your app pods to pick up the updated proxy configuration:
+
+```bash
+oc rollout restart deployment -n <your-app-namespace>
+```
+
+---
+
+## Repository Structure
+
+```
+.
+├── README.md                               # This file
+├── dashboards/
+│   ├── consul-data-plane-health.json       # Grafana health dashboard
+│   └── consul-data-plane-performance.json  # Grafana performance dashboard
+└── openshift/
+    ├── servicemonitor-consul-server.yaml   # ServiceMonitor for Consul servers
+    ├── servicemonitor-consul-sidecars.yaml # ServiceMonitor for Envoy sidecars
+    └── prometheus-rule-consul.yaml         # Example alerting rules
+```
 
 ## Resources
 
-- [Grafana Operator Documentation](https://grafana-operator.github.io/grafana-operator/)
 - [OpenShift User Workload Monitoring](https://docs.openshift.com/container-platform/latest/monitoring/enabling-monitoring-for-user-defined-projects.html)
-- [Thanos Querier Authentication](https://docs.openshift.com/container-platform/latest/monitoring/accessing-third-party-monitoring-uis-and-apis.html)
+- [Grafana Operator Documentation](https://grafana-operator.github.io/grafana-operator/)
+- [Consul Telemetry Docs](https://developer.hashicorp.com/consul/docs/agent/telemetry)
+- [Consul on Kubernetes Metrics](https://developer.hashicorp.com/consul/docs/observe/telemetry/k8s)
+- [PodMonitor API Reference](https://prometheus-operator.dev/docs/operator/api/#monitoring.coreos.com/v1.PodMonitor)
 - [Envoy Proxy Statistics](https://www.envoyproxy.io/docs/envoy/latest/operations/stats_overview)
+- [Thanos Querier Authentication](https://docs.openshift.com/container-platform/latest/monitoring/accessing-third-party-monitoring-uis-and-apis.html)
