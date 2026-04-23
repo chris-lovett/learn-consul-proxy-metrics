@@ -358,3 +358,512 @@ oc rollout restart deployment -n <your-app-namespace>
 - [Consul on Kubernetes Metrics](https://developer.hashicorp.com/consul/docs/observe/telemetry/k8s)
 - [PodMonitor API Reference](https://prometheus-operator.dev/docs/operator/api/#monitoring.coreos.com/v1.PodMonitor)
 - [Envoy Proxy Statistics](https://www.envoyproxy.io/docs/envoy/latest/operations/stats_overview)
+
+
+# Grafana Setup for Consul Proxy Metrics on OpenShift (ROSA)
+
+This guide covers deploying Grafana on OpenShift using the **Grafana Operator** and connecting it to the built-in Thanos Querier to visualize Consul proxy metrics.
+
+> **Why the Grafana Operator?** The community Grafana Helm chart injects seccomp annotations that are forbidden by OpenShift's Security Context Constraints (SCCs), causing pods to fail to schedule. The Grafana Operator is OpenShift-native and handles all SCC requirements automatically.
+
+## Prerequisites
+
+Before starting this section, ensure you have completed:
+- ✅ User workload monitoring enabled (`openshift-user-workload-monitoring` pods running)
+- ✅ PodMonitor created and scraping Consul proxy metrics from your app namespace
+- ✅ Metrics verified in Prometheus UI (`consul_dataplane_consul_connected = 1` for all pods)
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    observability namespace               │
+│                                                          │
+│  ┌─────────────────┐      ┌──────────────────────────┐  │
+│  │ Grafana Operator│      │    Grafana Instance       │  │
+│  │   (manages)     │─────▶│    grafana-deployment     │  │
+│  └─────────────────┘      └──────────┬───────────────┘  │
+│                                      │ queries           │
+│                                      ▼                   │
+│                         ┌────────────────────────┐       │
+│                         │  Thanos Querier         │       │
+│                         │  (openshift-monitoring) │       │
+│                         └────────────┬───────────┘       │
+│                                      │ federates         │
+│                         ┌────────────▼───────────┐       │
+│                         │  User Workload          │       │
+│                         │  Prometheus             │       │
+│                         │  (scrapes port 20200)   │       │
+│                         └────────────────────────┘       │
+└─────────────────────────────────────────────────────────┘
+```
+
+## Step 1 — Create the observability Namespace (if not already done)
+
+```bash
+oc new-project observability
+```
+
+## Step 2 — Install the Grafana Operator via OLM (10 min)
+
+OpenShift uses the Operator Lifecycle Manager (OLM) to install operators. An `OperatorGroup` is required to tell OLM the target scope for the operator.
+
+```bash
+# Create the OperatorGroup
+cat <<EOF | oc apply -f -
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: observability-operatorgroup
+  namespace: observability
+spec:
+  targetNamespaces:
+    - observability
+EOF
+
+# Create the Subscription to install the Grafana Operator
+cat <<EOF | oc apply -f -
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: grafana-operator
+  namespace: observability
+spec:
+  channel: v5
+  name: grafana-operator
+  source: community-operators
+  sourceNamespace: openshift-marketplace
+EOF
+```
+
+Wait for the operator to install — this takes 1-2 minutes:
+
+```bash
+oc get csv -n observability --watch
+```
+
+Wait until you see `PHASE: Succeeded`:
+
+```
+NAME                       DISPLAY            VERSION   REPLACES                   PHASE
+grafana-operator.v5.22.2   Grafana Operator   5.22.2    grafana-operator.v5.21.2   Succeeded
+```
+
+## Step 3 — Create a Service Account for Grafana (5 min)
+
+Grafana needs a service account with permission to query the Thanos Querier.
+
+```bash
+# Create the service account
+oc create serviceaccount grafana -n observability
+
+# Grant permission to query cluster metrics via Thanos
+oc adm policy add-cluster-role-to-user cluster-monitoring-view \
+  -z grafana \
+  -n observability
+
+# Create a long-lived secret-based token (more reliable than projected tokens for Thanos auth)
+cat <<EOF | oc apply -f -
+apiVersion: v1
+kind: Secret
+metadata:
+  name: grafana-sa-token
+  namespace: observability
+  annotations:
+    kubernetes.io/service-account.name: grafana
+type: kubernetes.io/service-account-token
+EOF
+
+# Wait for the token to be populated
+sleep 5
+
+# Verify the token works against Thanos
+SA_TOKEN=$(oc get secret grafana-sa-token -n observability -o jsonpath='{.data.token}' | base64 -d)
+
+curl -k -H "Authorization: Bearer $SA_TOKEN" \
+  "https://thanos-querier-openshift-monitoring.$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')/api/v1/query?query=up" | head -c 200
+```
+
+You should see a JSON response with `"status":"success"`. If you see `Unauthorized`, verify the service account has the `cluster-monitoring-view` role.
+
+## Step 4 — Deploy the Grafana Instance (5 min)
+
+```bash
+cat <<EOF | oc apply -f -
+apiVersion: grafana.integreatly.org/v1beta1
+kind: Grafana
+metadata:
+  name: grafana
+  namespace: observability
+  labels:
+    dashboards: grafana
+spec:
+  config:
+    auth:
+      disable_login_form: "false"
+    security:
+      admin_user: admin
+      admin_password: changeme123
+  deployment:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: grafana
+              env:
+                - name: THANOS_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: grafana-sa-token
+                      key: token
+EOF
+```
+
+Wait for the pod to start:
+
+```bash
+oc get pods -n observability --watch
+```
+
+Expected output:
+```
+NAME                                   READY   STATUS    RESTARTS   AGE
+grafana-deployment-xxx                 1/1     Running   0          30s
+```
+
+## Step 5 — Create the Thanos Datasource (5 min)
+
+Get your Thanos Querier URL:
+
+```bash
+oc get route thanos-querier -n openshift-monitoring -o jsonpath='{.spec.host}'
+```
+
+Create the datasource using the service account token:
+
+```bash
+SA_TOKEN=$(oc get secret grafana-sa-token -n observability -o jsonpath='{.data.token}' | base64 -d)
+THANOS_HOST=$(oc get route thanos-querier -n openshift-monitoring -o jsonpath='{.spec.host}')
+
+cat <<EOF | oc apply -f -
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDatasource
+metadata:
+  name: prometheus-thanos
+  namespace: observability
+spec:
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  datasource:
+    name: Prometheus
+    type: prometheus
+    access: proxy
+    url: https://${THANOS_HOST}
+    isDefault: true
+    jsonData:
+      httpHeaderName1: "Authorization"
+      tlsSkipVerify: true
+      timeInterval: "5s"
+    secureJsonData:
+      httpHeaderValue1: "Bearer ${SA_TOKEN}"
+EOF
+```
+
+Verify the datasource was created:
+
+```bash
+oc get grafanadatasource -n observability
+```
+
+Expected output:
+```
+NAME                NO MATCHING INSTANCES   LAST RESYNC   AGE
+prometheus-thanos                           30s           31s
+```
+
+> **Important:** Use a secret-based token (`kubernetes.io/service-account-token`) rather than a projected token (`oc create token`). Projected tokens are not accepted by the Thanos Querier's RBAC proxy.
+
+## Step 6 — Expose Grafana with an OpenShift Route (2 min)
+
+```bash
+cat <<EOF | oc apply -f -
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: grafana-route
+  namespace: observability
+spec:
+  to:
+    kind: Service
+    name: grafana-service
+  port:
+    targetPort: grafana
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+EOF
+
+# Get the Grafana URL
+GRAFANA_URL=$(oc get route grafana-route -n observability -o jsonpath='{.spec.host}')
+echo "Grafana URL: https://$GRAFANA_URL"
+```
+
+Open the URL in your browser and log in with:
+- **Username:** `admin`
+- **Password:** `changeme123`
+
+### Verify the Datasource
+
+1. Go to **Connections → Data Sources → Prometheus**
+2. Click **Save & Test**
+3. You should see: `Successfully queried the Prometheus API`
+
+## Step 7 — Load the Consul Dashboards (10 min)
+
+The dashboard JSON files reference a hardcoded Grafana datasource UID (`PBFA97CFB590B2093`) from the original EKS tutorial environment. We need to replace this with our actual datasource UID and fix the hardcoded namespace variable before loading them.
+
+### Get Your Datasource UID
+
+```bash
+GRAFANA_URL=$(oc get route grafana-route -n observability -o jsonpath='{.spec.host}')
+
+DATASOURCE_UID=$(curl -sk "https://$GRAFANA_URL/api/datasources" \
+  -u admin:changeme123 | python3 -m json.tool | grep '"uid"' | head -1 | tr -d ' ",' | cut -d: -f2)
+
+echo "Datasource UID: $DATASOURCE_UID"
+```
+
+### Prepare the Dashboard JSON Files
+
+```bash
+# Copy dashboard files to a working directory
+cp dashboards/consul-data-plane-health.json /tmp/health-dashboard.json
+cp dashboards/consul-data-plane-performance.json /tmp/performance-dashboard.json
+
+# Replace the hardcoded datasource UID with your actual UID
+sed -i '' "s/PBFA97CFB590B2093/${DATASOURCE_UID}/g" /tmp/health-dashboard.json
+sed -i '' "s/PBFA97CFB590B2093/${DATASOURCE_UID}/g" /tmp/performance-dashboard.json
+
+# Fix the hardcoded namespace and app variables to use dynamic label_values queries
+# This allows the dashboards to discover namespaces from actual metrics
+python3 - <<'EOF'
+import json, sys
+
+for filepath, outpath in [
+    ('/tmp/health-dashboard.json', '/tmp/health-dashboard.json'),
+    ('/tmp/performance-dashboard.json', '/tmp/performance-dashboard.json')
+]:
+    with open(filepath, 'r') as f:
+        dashboard = json.load(f)
+
+    for template in dashboard.get('templating', {}).get('list', []):
+        if template.get('name') == 'namespace':
+            template['type'] = 'query'
+            template['query'] = 'label_values(envoy_cluster_upstream_rq_total, namespace)'
+            template['queryValue'] = ''
+            template['options'] = []
+            template['current'] = {}
+        if template.get('name') == 'app':
+            template['type'] = 'query'
+            template['query'] = 'label_values(envoy_cluster_upstream_rq_total{namespace="$namespace"}, local_cluster)'
+            template['queryValue'] = ''
+            template['options'] = []
+            template['current'] = {}
+
+    with open(outpath, 'w') as f:
+        json.dump(dashboard, f)
+
+print("Done - both dashboards updated")
+EOF
+```
+
+### Load Dashboards via ConfigMaps
+
+```bash
+# Create ConfigMaps from the prepared dashboard JSON files
+oc create configmap consul-data-plane-health \
+  -n observability \
+  --from-file=consul-data-plane-health.json=/tmp/health-dashboard.json
+
+oc create configmap consul-data-plane-performance \
+  -n observability \
+  --from-file=consul-data-plane-performance.json=/tmp/performance-dashboard.json
+
+# Create GrafanaDashboard resources that reference the ConfigMaps
+cat <<EOF | oc apply -f -
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: consul-data-plane-health
+  namespace: observability
+spec:
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  configMapRef:
+    name: consul-data-plane-health
+    key: consul-data-plane-health.json
+---
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: consul-data-plane-performance
+  namespace: observability
+spec:
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  configMapRef:
+    name: consul-data-plane-performance
+    key: consul-data-plane-performance.json
+EOF
+
+# Verify dashboards were created and synced
+oc get grafanadashboard -n observability
+```
+
+Expected output:
+```
+NAME                            NO MATCHING INSTANCES   LAST RESYNC   AGE
+consul-data-plane-health                                30s           31s
+consul-data-plane-performance                           30s           31s
+```
+
+## Step 8 — Explore the Dashboards
+
+In the Grafana UI, go to **Dashboards → Browse** and open either dashboard.
+
+Set the filters:
+- **namespace:** Select your app namespace (e.g., `demo`)
+- **app:** Select `All` or a specific service
+
+### Data Plane Health Dashboard
+
+Shows the overall health of your service mesh:
+
+- **Running services** — count of active Consul-connected services
+- **Connections Rejected** — rejected upstream connections per service
+- **Upstream Rq by Status Code** — HTTP request rates broken down by 2xx/3xx/4xx/5xx
+- **Downstream Rq by Status Code** — inbound request status codes
+- **HTTP Status** — overall HTTP traffic health
+
+### Data Plane Performance Dashboard
+
+Shows performance metrics across your mesh:
+
+- **Dataplane Latency** — P50/P95/P99 latency across all services
+- **Requests Active (Upstream)** — active upstream connections
+- **Connections Rejected** — connection rejection rates
+- **Latency by Throughput** — latency vs. throughput correlation
+- **Mem/CPU Usage** — resource usage by pod (requires kube-state-metrics)
+
+## Verification
+
+Confirm everything is working end to end:
+
+```bash
+# Check all resources are running
+oc get pods -n observability
+oc get grafanadatasource -n observability
+oc get grafanadashboard -n observability
+
+# Confirm metrics are flowing from your app namespace
+SA_TOKEN=$(oc get secret grafana-sa-token -n observability -o jsonpath='{.data.token}' | base64 -d)
+THANOS_HOST=$(oc get route thanos-querier -n openshift-monitoring -o jsonpath='{.spec.host}')
+
+curl -k -H "Authorization: Bearer $SA_TOKEN" \
+  "https://${THANOS_HOST}/api/v1/query?query=consul_dataplane_consul_connected" \
+  | python3 -m json.tool | grep -E '"namespace"|"value"'
+```
+
+All pods in your app namespace should show `consul_dataplane_consul_connected = 1`.
+
+## Cleanup
+
+To remove Grafana and all related resources:
+
+```bash
+# Remove dashboards
+oc delete grafanadashboard consul-data-plane-health consul-data-plane-performance -n observability
+
+# Remove datasource
+oc delete grafanadatasource prometheus-thanos -n observability
+
+# Remove Grafana instance
+oc delete grafana grafana -n observability
+
+# Remove the operator
+oc delete subscription grafana-operator -n observability
+oc delete csv grafana-operator.v5.22.2 -n observability
+
+# Remove ConfigMaps
+oc delete configmap consul-data-plane-health consul-data-plane-performance -n observability
+
+# Remove service account and token
+oc delete secret grafana-sa-token -n observability
+oc delete serviceaccount grafana -n observability
+
+# Remove route
+oc delete route grafana-route -n observability
+
+# Remove OperatorGroup (only if no other operators in this namespace)
+oc delete operatorgroup observability-operatorgroup -n observability
+```
+
+## Troubleshooting
+
+### 401 Unauthorized on Datasource Test
+
+The token type matters. Use a secret-based token, not a projected token:
+
+```bash
+# Verify your token type
+oc get secret grafana-sa-token -n observability -o jsonpath='{.type}'
+# Should output: kubernetes.io/service-account-token
+
+# Test the token directly against Thanos
+SA_TOKEN=$(oc get secret grafana-sa-token -n observability -o jsonpath='{.data.token}' | base64 -d)
+THANOS_HOST=$(oc get route thanos-querier -n openshift-monitoring -o jsonpath='{.spec.host}')
+curl -k -H "Authorization: Bearer $SA_TOKEN" "https://${THANOS_HOST}/api/v1/query?query=up" | head -c 100
+```
+
+### Namespace Dropdown Only Shows `default` and `consul`
+
+The dashboard JSON has hardcoded namespace values. Re-run the Python script from Step 7 to fix the variable queries and re-apply the ConfigMaps.
+
+### Datasource UID Error in Dashboards
+
+The original dashboard JSON references `PBFA97CFB590B2093` — a hardcoded UID from the EKS tutorial environment. Run the `sed` replacement from Step 7 to replace it with your actual datasource UID.
+
+### No Data in Panels After Setting Namespace
+
+Verify metrics exist for your namespace in Thanos:
+
+```bash
+SA_TOKEN=$(oc get secret grafana-sa-token -n observability -o jsonpath='{.data.token}' | base64 -d)
+THANOS_HOST=$(oc get route thanos-querier -n openshift-monitoring -o jsonpath='{.spec.host}')
+
+curl -k -H "Authorization: Bearer $SA_TOKEN" \
+  "https://${THANOS_HOST}/api/v1/query?query=envoy_cluster_upstream_rq_total{namespace=\"<your-namespace>\"}" \
+  | python3 -m json.tool | head -30
+```
+
+If this returns results, data is flowing and the issue is the dashboard variable configuration. If it returns empty results, check your PodMonitor is correctly targeting the pods.
+
+### Grafana Operator CSV Stuck in Installing
+
+An `OperatorGroup` is required. Check:
+
+```bash
+oc get operatorgroup -n observability
+```
+
+If missing, create it (see Step 2) then delete and recreate the Subscription.
+
+## Resources
+
+- [Grafana Operator Documentation](https://grafana-operator.github.io/grafana-operator/)
+- [OpenShift User Workload Monitoring](https://docs.openshift.com/container-platform/latest/monitoring/enabling-monitoring-for-user-defined-projects.html)
+- [Thanos Querier Authentication](https://docs.openshift.com/container-platform/latest/monitoring/accessing-third-party-monitoring-uis-and-apis.html)
+- [Envoy Proxy Statistics](https://www.envoyproxy.io/docs/envoy/latest/operations/stats_overview)
