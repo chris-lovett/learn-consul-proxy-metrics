@@ -360,7 +360,7 @@ oc rollout restart deployment -n <your-app-namespace>
 - [Envoy Proxy Statistics](https://www.envoyproxy.io/docs/envoy/latest/operations/stats_overview)
 
 
-# Grafana Setup for Consul Proxy Metrics on OpenShift (ROSA)
+# Grafana Setup for Consul Proxy Metrics on OpenShift 
 
 This guide covers deploying Grafana on OpenShift using the **Grafana Operator** and connecting it to the built-in Thanos Querier to visualize Consul proxy metrics.
 
