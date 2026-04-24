@@ -1,4 +1,4 @@
-# Consul Proxy Metrics on OpenShift (ROSA)
+# Consul Proxy Metrics on OpenShift 
 
 Monitor Consul service mesh health and performance using OpenShift's built-in monitoring stack — no extra Helm charts required.
 
