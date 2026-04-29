@@ -550,6 +550,201 @@ Set the **namespace** dropdown to your app namespace (e.g., `demo`). The **app**
 
 ---
 
+## Part 4 — Enable Consul UI Topology (Metrics Proxy)
+
+Consul's UI Topology view shows real-time request rates and error percentages for each service in the mesh. These metrics are served through Consul's built-in **metrics proxy** endpoint (`/v1/internal/ui/metrics-proxy/...`), which queries Prometheus on behalf of the UI over the cluster network.
+
+### Why Prometheus Stays Private
+
+The metrics proxy pattern means **Prometheus never needs a public Route**. The flow is:
+
+```
+Browser → Consul UI Route (HTTPS) → Consul metrics-proxy → Prometheus (cluster-internal)
+```
+
+Prometheus is only reachable from within the cluster, which avoids exposing raw metrics data to the internet. Do **not** create a public Route for Prometheus.
+
+### Step 14 — Configure Consul Helm Values for Metrics Proxy
+
+Add (or merge) the following to your `values.yaml` and run `helm upgrade`:
+
+```yaml
+ui:
+  enabled: true
+  metrics:
+    enabled: true
+    provider: prometheus
+    # Use port 80 if your Prometheus Service uses that port; use :9090 only if
+    # the Kubernetes Service exposes port 9090 directly.
+    baseURL: http://prometheus-server.observability.svc.cluster.local
+```
+
+Apply with:
+
+```bash
+helm upgrade consul hashicorp/consul -n consul -f values.yaml
+```
+
+> **Port note:** In a standard Prometheus Helm install the Kubernetes Service listens on port `80` (proxied to 9090 inside the pod). If your Service exposes port `9090`, use `http://prometheus-server.observability.svc.cluster.local:9090`.
+
+### Step 15 — Verify Prometheus Is Reachable from the Consul Server Pod
+
+```bash
+oc exec -n consul consul-server-0 -c consul -- sh -lc \
+  'getent hosts prometheus-server.observability.svc.cluster.local && \
+   curl -sv http://prometheus-server.observability.svc.cluster.local/-/ready 2>&1 | tail -n +1'
+```
+
+You should see the IP address resolved and an HTTP `200 OK` response body of `Prometheus Server is Ready.`
+
+### Step 16 — Verify the Metrics Proxy Endpoint
+
+Test the endpoint from outside the cluster (the same path the browser calls):
+
+```bash
+curl -skv "https://<consul-ui-route-host>/v1/internal/ui/metrics-proxy/api/v1/query?query=up"
+```
+
+**Interpreting the response:**
+- `200 OK` with Prometheus JSON → metrics proxy is working end-to-end.
+- Response header `x-consul-default-acl-policy: deny` **and** body referencing "anonymous token" → ACL/token propagation issue. See [Consul UI Topology: Unable to load metrics](#consul-ui-topology-unable-to-load-metrics) in the Troubleshooting section.
+
+---
+
+## Part 5 — Auth0 OIDC Integration (Secure UI Login)
+
+Enabling OIDC login in the Consul UI ensures that metrics-proxy requests carry a real Consul token (issued after a successful Auth0 login) instead of the anonymous token, which is denied by default ACL policy.
+
+### Step 17 — Configure Auth0 Application Settings
+
+In your Auth0 Dashboard → **Applications → \<your app\>**, set:
+
+| Setting | Value |
+|---|---|
+| **Allowed Callback URLs** | `https://<consul-ui-route-host>/ui/oidc/callback` |
+| **Allowed Web Origins** | `https://<consul-ui-route-host>` |
+| **Allowed Logout URLs** | `https://<consul-ui-route-host>/` |
+
+> Replace `<consul-ui-route-host>` with the actual hostname from `oc get route consul-ui -n consul -o jsonpath='{.spec.host}'`.
+
+> **Callback URL mismatch:** If Auth0 login fails with "Callback URL mismatch", it almost always means the Route hostname is missing from **Allowed Callback URLs**. The localhost entries serve two distinct purposes and must be kept alongside the Route entry:
+> - `http://localhost:8550/oidc/callback` — Consul CLI OIDC login (plain HTTP, port 8550)
+> - `https://localhost:8501/ui/oidc/callback` and `https://127.0.0.1:8501/ui/oidc/callback` — browser-based Consul UI running locally (HTTPS, port 8501)
+
+### Step 18 — Verify the Consul ACL Auth Method
+
+Confirm the `auth0` auth method includes the Route hostname in `AllowedRedirectURIs`:
+
+```bash
+BOOTSTRAP_TOKEN="$(oc get secret -n consul consul-bootstrap-acl-token \
+  -o jsonpath='{.data.token}' | base64 -d)"
+
+oc exec -n consul consul-server-0 -c consul -- sh -lc \
+  "CONSUL_HTTP_TOKEN='${BOOTSTRAP_TOKEN}' consul acl auth-method read -name auth0"
+```
+
+`AllowedRedirectURIs` must contain `https://<consul-ui-route-host>/ui/oidc/callback`. If it does not, add it:
+
+```bash
+oc exec -n consul consul-server-0 -c consul -- sh -lc \
+  "CONSUL_HTTP_TOKEN='${BOOTSTRAP_TOKEN}' consul acl auth-method update \
+    -name auth0 \
+    -allowed-redirect-uri 'http://localhost:8550/oidc/callback' \
+    -allowed-redirect-uri 'https://localhost:8501/ui/oidc/callback' \
+    -allowed-redirect-uri 'https://127.0.0.1:8501/ui/oidc/callback' \
+    -allowed-redirect-uri 'https://<consul-ui-route-host>/ui/oidc/callback'"
+```
+
+> **Port note for localhost URIs:** Port `8550` (HTTP) is used by the Consul CLI OIDC login flow. Port `8501` (HTTPS) is the TLS UI port for a locally-running Consul server. Both are needed for developer workflows; neither replaces the other.
+
+### Step 19 — Ensure Binding Rules Grant Required Permissions
+
+The role bound by your OIDC auth method binding rule must grant at minimum:
+
+- `node_prefix "" { policy = "read" }` — required for Topology
+- `service_prefix "" { policy = "read" }` — required for Topology
+- `operator = "read"` — required for Topology cluster metadata calls
+- `agent_prefix "" { policy = "read" }` — recommended for health views
+
+Inspect the role and its attached policies:
+
+```bash
+oc exec -n consul consul-server-0 -c consul -- sh -lc \
+  "CONSUL_HTTP_TOKEN='${BOOTSTRAP_TOKEN}' consul acl role read -name eng-ro"
+```
+
+If `operator:read` or `node:read` is missing, update the policy attached to the role accordingly.
+
+### Step 20 — Enable OIDC in the Consul UI via `server.extraConfig`
+
+#### Why `ui.config` May Not Work
+
+In some versions of the HashiCorp Consul Helm chart, the `ui.config` value is **not** written into the Consul agent config files that control UI authentication. When you inspect the running config:
+
+```bash
+oc exec -n consul consul-server-0 -c consul -- sh -lc 'cat /consul/config/ui-config.json'
+```
+
+you may see only the metrics block — no `auth` section — even after adding OIDC fields under `ui.config` in `values.yaml`. This means the chart generates `ui-config.json` only from `ui.metrics.*` and does not mount the `ui.config` string into the agent config for those chart versions.
+
+#### Fix: Use `server.extraConfig`
+
+The reliable solution is to inject the UI auth configuration via `server.extraConfig`, which creates an additional agent config file that Consul merges at startup:
+
+```yaml
+server:
+  extraConfig: |
+    {
+      "ui_config": {
+        "enabled": true,
+        "auth": {
+          "enabled": true,
+          "type": "oidc",
+          "auth_method": "auth0"
+        }
+      }
+    }
+```
+
+Keep your existing `ui.metrics` block unchanged — Consul merges all config files, so the metrics-proxy settings in `ui-config.json` and the auth settings from `extraConfig` are both applied.
+
+Apply and restart:
+
+```bash
+helm upgrade consul hashicorp/consul -n consul -f values.yaml
+oc rollout restart statefulset/consul-server -n consul
+oc rollout status statefulset/consul-server -n consul
+```
+
+#### Verify the Config Landed
+
+After rollout, confirm the auth method config is present in the merged config files:
+
+```bash
+# List all config files mounted into the server
+oc exec -n consul consul-server-0 -c consul -- sh -lc 'ls -la /consul/config'
+
+# Find whichever file contains the auth_method setting
+oc exec -n consul consul-server-0 -c consul -- sh -lc \
+  'grep -R "auth_method" -n /consul/config || true'
+```
+
+You should see `"auth_method": "auth0"` in one of the config files. It does **not** need to be in `ui-config.json` specifically — Consul merges all files under `/consul/config` at startup.
+
+### Security Note
+
+- **Never commit OIDC client secrets** to source control or paste them in chat/tickets.
+- The `OIDCClientSecret` field output by `consul acl auth-method read` is a live credential. Treat any exposed secret as compromised and rotate it in Auth0, then update the Consul auth method:
+
+```bash
+oc exec -n consul consul-server-0 -c consul -- sh -lc \
+  "CONSUL_HTTP_TOKEN='${BOOTSTRAP_TOKEN}' consul acl auth-method update \
+    -name auth0 \
+    -oidc-client-secret '<new-secret>'"
+```
+
+---
+
 ## Useful Prometheus Queries
 
 Access the Prometheus UI at any time:
@@ -608,6 +803,37 @@ oc delete project observability
 ---
 
 ## Troubleshooting
+
+### Consul UI Topology: Unable to load metrics
+
+The Topology view shows "Unable to load metrics" even when Prometheus is running. The most common root cause is **Consul ACLs**, not Prometheus connectivity.
+
+**Root cause:** When Consul ACLs are enabled with a default-deny policy, metrics-proxy requests are evaluated as the anonymous token. The anonymous token lacks the permissions needed (`node:read`, `operator:read`, `service:read`), causing 403 errors:
+
+```
+Permission denied: anonymous token lacks permission 'node:read' ...
+Permission denied: anonymous token lacks permission 'operator:read' ...
+```
+
+Running `consul acl ... list` without a token similarly returns "anonymous token lacks permission 'acl:read'".
+
+**Step 1 — Verify Prometheus is reachable from the Consul server pod:**
+
+```bash
+oc exec -n consul consul-server-0 -c consul -- sh -lc \
+  'getent hosts prometheus-server.observability.svc.cluster.local && \
+   curl -sv http://prometheus-server.observability.svc.cluster.local/-/ready 2>&1 | tail -n +1'
+```
+
+This confirms DNS resolution and HTTP reachability inside the cluster. Prometheus does not need a public Route.
+
+**Step 2 — Test the metrics proxy endpoint and interpret 403 responses:**
+
+```bash
+curl -skv "https://<consul-ui-route-host>/v1/internal/ui/metrics-proxy/api/v1/query?query=up"
+```
+
+If the response contains the header `x-consul-default-acl-policy: deny` and the body references "anonymous token", the issue is not Prometheus reachability — it is an ACL/token propagation issue. Enable OIDC so the UI attaches a real Consul token (see Part 5).
 
 ### "Permission denied: anonymous token lacks permission 'agent:read'"
 
