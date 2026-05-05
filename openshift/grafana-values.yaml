@@ -56,15 +56,15 @@ datasources:
 # Sidecar to auto-load dashboards from ConfigMaps
 sidecar:
   dashboards:
-    enabled: true
-    label: grafana_dashboard
-    labelValue: "1"
-    searchNamespace: observability
-  securityContext:
-    allowPrivilegeEscalation: false
-    capabilities:
-      drop: ["ALL"]
-    runAsNonRoot: true
+    enabled: false
+  datasources:
+    enabled: false
+  notifiers:
+    enabled: false
+  alerts:
+    enabled: false
+  plugins:
+    enabled: false
 
 # Pre-load the Consul dashboards from the dashboards/ directory
 # Apply these separately as ConfigMaps (see instructions below)
