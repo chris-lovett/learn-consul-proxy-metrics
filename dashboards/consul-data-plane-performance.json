@@ -777,8 +777,8 @@
   },
   "timepicker": {},
   "timezone": "browser",
-  "title": "Data Plane Health",
-  "uid": "data-plane-health",
+  "title": "Data Plane Performance",
+  "uid": "data-plane-performance",
   "version": 5,
   "weekStart": ""
 }
