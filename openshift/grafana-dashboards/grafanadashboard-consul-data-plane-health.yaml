@@ -1,0 +1,12 @@
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: consul-data-plane-health
+  namespace: observability
+spec:
+  configMapRef:
+    name: consul-data-plane-health
+    key: consul-data-plane-health.json
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
