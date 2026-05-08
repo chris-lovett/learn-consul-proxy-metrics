@@ -1,0 +1,474 @@
+# =============================================================================
+# GrafanaDashboard CRs — converted from ConfigMap provisioning format
+# Deploy with: kubectl apply -f grafana-dashboards-cr.yaml
+# =============================================================================
+
+---
+# 1. CONSUL SERVERS
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: platform-consul-servers
+  namespace: observability
+spec:
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  folder: Platform
+  json: |
+    {
+      "title": "Consul Servers",
+      "uid": "platform-consul-servers",
+      "description": "Per-datacenter Consul server health: autopilot, Raft, RPC query performance, runtime, and cluster peering",
+      "tags": ["consul", "servers", "raft", "peering", "platform"],
+      "timezone": "browser",
+      "schemaVersion": 38,
+      "refresh": "30s",
+      "graphTooltip": 1,
+      "time": { "from": "now-1h", "to": "now" },
+      "timepicker": {},
+      "editable": true,
+      "id": null,
+      "links": [],
+      "version": 1,
+      "templating": {
+        "list": [
+          {
+            "name": "datacenter",
+            "label": "Datacenter",
+            "type": "query",
+            "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+            "definition": "label_values(up{job=\"consul-servers\"}, datacenter)",
+            "query": { "query": "label_values(up{job=\"consul-servers\"}, datacenter)", "refId": "StandardVariableQuery" },
+            "includeAll": true,
+            "allValue": ".*",
+            "multi": true,
+            "hide": 0,
+            "refresh": 2,
+            "sort": 1,
+            "current": {},
+            "options": []
+          },
+          {
+            "name": "pod",
+            "label": "Server Pod",
+            "type": "query",
+            "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+            "definition": "label_values(up{job=\"consul-servers\", datacenter=~\"$datacenter\"}, pod)",
+            "query": { "query": "label_values(up{job=\"consul-servers\", datacenter=~\"$datacenter\"}, pod)", "refId": "StandardVariableQuery" },
+            "includeAll": true,
+            "allValue": ".*",
+            "multi": true,
+            "hide": 0,
+            "refresh": 2,
+            "sort": 1,
+            "current": {},
+            "options": []
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1, "type": "stat", "title": "Consul Servers Up",
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [{ "type": "value", "options": { "0": { "text": "DOWN", "color": "red", "index": 0 } } }],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+            },
+            "overrides": []
+          },
+          "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+          "targets": [
+            { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A",
+              "expr": "sum(up{job=\"consul-servers\", datacenter=~\"$datacenter\"} == 1) or vector(0)",
+              "instant": true, "legendFormat": "Servers Up" }
+          ]
+        },
+        {
+          "id": 2, "type": "stat", "title": "Autopilot Healthy",
+          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [{ "type": "value", "options": {
+                "0": { "text": "UNHEALTHY", "color": "red", "index": 0 },
+                "1": { "text": "HEALTHY", "color": "green", "index": 1 }
+              }}],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+            },
+            "overrides": []
+          },
+          "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+          "targets": [
+            { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A",
+              "expr": "min(consul_autopilot_healthy{datacenter=~\"$datacenter\"}) or vector(0)",
+              "instant": true, "legendFormat": "Autopilot" }
+          ]
+        },
+        {
+          "id": 3, "type": "stat", "title": "LAN Members",
+          "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "fieldConfig": {
+            "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] } },
+            "overrides": []
+          },
+          "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+          "targets": [
+            { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A",
+              "expr": "sum(max by(datacenter)(consul_members_servers{datacenter=~\"$datacenter\"}))",
+              "instant": true, "legendFormat": "Servers" },
+            { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "B",
+              "expr": "sum(max by(datacenter)(consul_members_clients{datacenter=~\"$datacenter\"}))",
+              "instant": true, "legendFormat": "Clients" }
+          ]
+        },
+        {
+          "id": 4, "type": "stat", "title": "Registered Services",
+          "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "fieldConfig": {
+            "defaults": { "color": { "mode": "thresholds" }, "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] } },
+            "overrides": []
+          },
+          "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+          "targets": [
+            { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A",
+              "expr": "sum(max by(datacenter)(consul_state_service_instances{datacenter=~\"$datacenter\",partition=\"default\"})) - sum(max by(datacenter)(consul_members_servers{datacenter=~\"$datacenter\"})) - sum(max by(datacenter,kind)(consul_state_connect_instances{datacenter=~\"$datacenter\",partition=\"default\",kind=~\"api-gateway|mesh-gateway|ingress-gateway|terminating-gateway\"}))",
+              "instant": true, "legendFormat": "Services" }
+          ]
+        },
+        { "id": 10, "type": "row", "title": "Raft Health", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 4 } },
+        {
+          "id": 11, "type": "timeseries", "title": "Raft Applied vs Last Index",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 },
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 1, "fillOpacity": 10, "spanNulls": false } }, "overrides": [] },
+          "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "none" } },
+          "targets": [
+            { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A",
+              "expr": "max by (datacenter, pod) (consul_raft_applied_index{datacenter=~\"$datacenter\", pod=~\"$pod\"})", "legendFormat": "Applied Index ({{datacenter}}/{{pod}})" },
+            { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "B",
+              "expr": "max by (datacenter, pod) (consul_raft_last_index{datacenter=~\"$datacenter\", pod=~\"$pod\"})", "legendFormat": "Last Index ({{datacenter}}/{{pod}})" }
+          ]
+        },
+        {
+          "id": 12, "type": "timeseries", "title": "Raft Commit Time & Leader Last Contact",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 },
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 1, "fillOpacity": 10 }, "unit": "ms" }, "overrides": [] },
+          "options": { "legend": { "calcs": ["lastNotNull", "mean"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "none" } },
+          "targets": [
+            { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A",
+              "expr": "1000 * sum by (datacenter, pod) (rate(consul_raft_commitTime_sum{datacenter=~\"$datacenter\", pod=~\"$pod\"}[5m])) / clamp_min(sum by (datacenter, pod) (rate(consul_raft_commitTime_count{datacenter=~\"$datacenter\", pod=~\"$pod\"}[5m])), 1)",
+              "legendFormat": "Avg Commit Time ms ({{datacenter}}/{{pod}})" },
+            { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "B",
+              "expr": "1000 * max by (datacenter, pod) (consul_raft_leader_lastContact{datacenter=~\"$datacenter\", pod=~\"$pod\", quantile=\"0.99\"})",
+              "legendFormat": "Leader Last Contact P99 ms ({{datacenter}}/{{pod}})" }
+          ]
+        },
+        { "id": 20, "type": "row", "title": "Query & RPC Health", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 13 } },
+        {
+          "id": 21, "type": "timeseries", "title": "Consul RPC Request Rate",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 },
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 1, "fillOpacity": 10 }, "unit": "reqps" }, "overrides": [] },
+          "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "none" } },
+          "targets": [
+            { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A",
+              "expr": "sum by (datacenter, pod) (rate(consul_client_rpc{datacenter=~\"$datacenter\", pod=~\"$pod\"}[5m]))", "legendFormat": "RPC Rate ({{datacenter}}/{{pod}})" }
+          ]
+        },
+        {
+          "id": 22, "type": "timeseries", "title": "Catalog API Operations",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 },
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 1, "fillOpacity": 10 }, "unit": "ops" }, "overrides": [] },
+          "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "none" } },
+          "targets": [
+            { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A",
+              "expr": "sum by (datacenter, pod) (rate(consul_client_api_success_catalog_register{datacenter=~\"$datacenter\", pod=~\"$pod\"}[5m]))", "legendFormat": "Register ({{datacenter}}/{{pod}})" },
+            { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "B",
+              "expr": "sum by (datacenter, pod) (rate(consul_client_api_success_catalog_deregister{datacenter=~\"$datacenter\", pod=~\"$pod\"}[5m]))", "legendFormat": "Deregister ({{datacenter}}/{{pod}})" }
+          ]
+        },
+        { "id": 30, "type": "row", "title": "Runtime", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 } },
+        {
+          "id": 31, "type": "timeseries", "title": "Consul Runtime Memory",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 23 },
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 1, "fillOpacity": 10 }, "unit": "bytes" }, "overrides": [] },
+          "options": { "legend": { "calcs": ["lastNotNull", "mean"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "none" } },
+          "targets": [
+            { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A",
+              "expr": "max by (datacenter, pod) (consul_runtime_alloc_bytes{datacenter=~\"$datacenter\", pod=~\"$pod\"})", "legendFormat": "Heap Alloc ({{datacenter}}/{{pod}})" },
+            { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "B",
+              "expr": "max by (datacenter, pod) (consul_runtime_sys_bytes{datacenter=~\"$datacenter\", pod=~\"$pod\"})", "legendFormat": "Sys Memory ({{datacenter}}/{{pod}})" }
+          ]
+        },
+        {
+          "id": 32, "type": "timeseries", "title": "Runtime Goroutines",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 23 },
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 1, "fillOpacity": 10 }, "unit": "short" }, "overrides": [] },
+          "options": { "legend": { "calcs": ["lastNotNull", "mean"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "none" } },
+          "targets": [
+            { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A",
+              "expr": "max by (datacenter, pod) (consul_runtime_num_goroutines{datacenter=~\"$datacenter\", pod=~\"$pod\"})", "legendFormat": "Goroutines ({{datacenter}}/{{pod}})" }
+          ]
+        },
+        { "id": 40, "type": "row", "title": "Cluster Peering (requires DC2 -> DC1 remote_write)", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 } },
+        {
+          "id": 41, "type": "timeseries", "title": "Peering: Exported Services per DC",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 1, "fillOpacity": 10 }, "unit": "short" }, "overrides": [] },
+          "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "none" } },
+          "targets": [
+            { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A",
+              "expr": "sum by (datacenter) (consul_peering_exported_services{datacenter=~\"$datacenter\"})", "legendFormat": "Exported Services ({{datacenter}})" }
+          ]
+        },
+        {
+          "id": 42, "type": "timeseries", "title": "Catalog Change Rate (Cross-DC Replication Indicator)",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 },
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 1, "fillOpacity": 10 }, "unit": "ops" }, "overrides": [] },
+          "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "none" } },
+          "targets": [
+            { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A",
+              "expr": "sum by (datacenter) (rate(consul_client_api_success_catalog_register{datacenter=~\"$datacenter\"}[5m]) + rate(consul_client_api_success_catalog_deregister{datacenter=~\"$datacenter\"}[5m]))",
+              "legendFormat": "Catalog Ops/s ({{datacenter}})" }
+          ]
+        }
+      ]
+    }
+
+---
+# 2. HASHICUPS SERVICE HEALTH
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: platform-hashicups-health
+  namespace: observability
+spec:
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  folder: Platform
+  json: |
+    {
+      "title": "HashiCups Service Health",
+      "uid": "platform-hashicups-health",
+      "description": "HashiCups inter-service traffic, error rates, latency, upstream connections, and circuit breaker status",
+      "tags": ["hashicups", "envoy", "service-mesh", "platform"],
+      "timezone": "browser",
+      "schemaVersion": 38,
+      "refresh": "30s",
+      "graphTooltip": 1,
+      "time": { "from": "now-1h", "to": "now" },
+      "timepicker": {},
+      "editable": true,
+      "id": null,
+      "links": [],
+      "version": 1,
+      "templating": {
+        "list": [
+          {
+            "name": "datacenter", "label": "Datacenter", "type": "query",
+            "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+            "definition": "label_values(envoy_cluster_upstream_rq_total{app=~\"frontend|nginx|payments|product-api|product-api-db|public-api\"}, datacenter)",
+            "query": { "query": "label_values(envoy_cluster_upstream_rq_total{app=~\"frontend|nginx|payments|product-api|product-api-db|public-api\"}, datacenter)", "refId": "StandardVariableQuery" },
+            "includeAll": true, "allValue": ".*", "multi": true, "hide": 0, "refresh": 2, "sort": 1, "current": {}, "options": []
+          },
+          {
+            "name": "namespace", "label": "Namespace", "type": "query",
+            "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+            "definition": "label_values(envoy_cluster_upstream_rq_total{datacenter=~\"$datacenter\", app=~\"frontend|nginx|payments|product-api|product-api-db|public-api\"}, namespace)",
+            "query": { "query": "label_values(envoy_cluster_upstream_rq_total{datacenter=~\"$datacenter\", app=~\"frontend|nginx|payments|product-api|product-api-db|public-api\"}, namespace)", "refId": "StandardVariableQuery" },
+            "includeAll": false, "multi": false, "hide": 0, "refresh": 2, "sort": 1, "current": {}, "options": []
+          },
+          {
+            "name": "app", "label": "Application", "type": "query",
+            "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+            "definition": "label_values(envoy_cluster_upstream_rq_total{namespace=\"$namespace\", datacenter=~\"$datacenter\"}, app)",
+            "query": { "query": "label_values(envoy_cluster_upstream_rq_total{namespace=\"$namespace\", datacenter=~\"$datacenter\"}, app)", "refId": "StandardVariableQuery" },
+            "includeAll": true, "allValue": "frontend|nginx|payments|product-api|product-api-db|public-api", "multi": true, "hide": 0, "refresh": 2, "sort": 1, "current": {}, "options": []
+          }
+        ]
+      },
+      "panels": [
+        { "id": 1, "type": "stat", "title": "Total RPS", "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "unit": "reqps", "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] } }, "overrides": [] }, "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "sum(rate(envoy_cluster_upstream_rq_total{namespace=\"$namespace\", datacenter=~\"$datacenter\", app=~\"$app\"}[5m]))", "instant": true, "legendFormat": "RPS" } ] },
+        { "id": 2, "type": "stat", "title": "Overall 5xx Error Rate", "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "unit": "percent", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 5 }] } }, "overrides": [] }, "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "100 * sum(rate(envoy_cluster_upstream_rq_5xx{namespace=\"$namespace\", datacenter=~\"$datacenter\", app=~\"$app\"}[5m])) / clamp_min(sum(rate(envoy_cluster_upstream_rq_total{namespace=\"$namespace\", datacenter=~\"$datacenter\", app=~\"$app\"}[5m])), 1)", "instant": true, "legendFormat": "Error %" } ] },
+        { "id": 3, "type": "stat", "title": "P95 Upstream Latency", "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "unit": "ms", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 250 }, { "color": "red", "value": 1000 }] } }, "overrides": [] }, "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "histogram_quantile(0.95, sum by (le) (rate(envoy_cluster_upstream_rq_time_bucket{namespace=\"$namespace\", datacenter=~\"$datacenter\", app=~\"$app\"}[5m])))", "instant": true, "legendFormat": "P95 ms" } ] },
+        { "id": 4, "type": "stat", "title": "Active Upstream Connections", "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] } }, "overrides": [] }, "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "sum(envoy_cluster_upstream_cx_active{namespace=\"$namespace\", datacenter=~\"$datacenter\", app=~\"$app\"})", "instant": true, "legendFormat": "Active Connections" } ] },
+        { "id": 10, "type": "row", "title": "Service Traffic", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 4 } },
+        { "id": 11, "type": "timeseries", "title": "Request Rate by Service (RPS)", "gridPos": { "h": 8, "w": 24, "x": 0, "y": 5 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 1, "fillOpacity": 10 }, "unit": "reqps" }, "overrides": [] }, "options": { "legend": { "calcs": ["lastNotNull", "mean"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "sum by (app) (rate(envoy_cluster_upstream_rq_total{namespace=\"$namespace\", datacenter=~\"$datacenter\", app=~\"$app\"}[5m]))", "legendFormat": "{{app}}" } ] },
+        { "id": 20, "type": "row", "title": "Error Rate & Latency", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 13 } },
+        { "id": 21, "type": "timeseries", "title": "5xx Error Rate by Service (%)", "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 1, "fillOpacity": 10 }, "unit": "percent", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 5 }] } }, "overrides": [] }, "options": { "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "100 * sum by (app) (rate(envoy_cluster_upstream_rq_5xx{namespace=\"$namespace\", datacenter=~\"$datacenter\", app=~\"$app\"}[5m])) / clamp_min(sum by (app) (rate(envoy_cluster_upstream_rq_total{namespace=\"$namespace\", datacenter=~\"$datacenter\", app=~\"$app\"}[5m])), 1)", "legendFormat": "{{app}}" } ] },
+        { "id": 22, "type": "timeseries", "title": "P95 Upstream Latency by Service (ms)", "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 1, "fillOpacity": 10 }, "unit": "ms" }, "overrides": [] }, "options": { "legend": { "calcs": ["lastNotNull", "mean"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "histogram_quantile(0.95, sum by (le, app) (rate(envoy_cluster_upstream_rq_time_bucket{namespace=\"$namespace\", datacenter=~\"$datacenter\", app=~\"$app\"}[5m])))", "legendFormat": "P95 {{app}}" }, { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "B", "expr": "histogram_quantile(0.99, sum by (le, app) (rate(envoy_cluster_upstream_rq_time_bucket{namespace=\"$namespace\", datacenter=~\"$datacenter\", app=~\"$app\"}[5m])))", "legendFormat": "P99 {{app}}" } ] },
+        { "id": 30, "type": "row", "title": "Service Connections & Health", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 } },
+        { "id": 31, "type": "timeseries", "title": "Active Upstream Connections by Service", "gridPos": { "h": 8, "w": 12, "x": 0, "y": 23 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 1, "fillOpacity": 10 }, "unit": "short" }, "overrides": [] }, "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "sum by (app) (envoy_cluster_upstream_cx_active{namespace=\"$namespace\", datacenter=~\"$datacenter\", app=~\"$app\"})", "legendFormat": "{{app}}" } ] },
+        { "id": 32, "type": "timeseries", "title": "Healthy Cluster Members by Service", "gridPos": { "h": 8, "w": 12, "x": 12, "y": 23 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 1, "fillOpacity": 10 }, "unit": "short" }, "overrides": [] }, "options": { "legend": { "calcs": ["lastNotNull", "min"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "sum by (app) (envoy_cluster_membership_healthy{namespace=\"$namespace\", datacenter=~\"$datacenter\", app=~\"$app\"})", "legendFormat": "{{app}}" } ] },
+        { "id": 40, "type": "row", "title": "Circuit Breakers (Outlier Detection)", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 } },
+        { "id": 41, "type": "timeseries", "title": "Active Circuit Breaker Ejections by Service", "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 20 }, "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } }, "overrides": [] }, "options": { "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "sum by (app) (envoy_cluster_outlier_detection_ejections_active{namespace=\"$namespace\", datacenter=~\"$datacenter\", app=~\"$app\"})", "legendFormat": "{{app}}" } ] },
+        { "id": 42, "type": "timeseries", "title": "Consecutive 5xx Ejections (Circuit Breaker Triggers)", "gridPos": { "h": 8, "w": 12, "x": 12, "y": 32 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 20 }, "unit": "short" }, "overrides": [] }, "options": { "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "sum by (app) (increase(envoy_cluster_outlier_detection_ejections_consecutive_5xx{namespace=\"$namespace\", datacenter=~\"$datacenter\", app=~\"$app\"}[5m]))", "legendFormat": "{{app}}" } ] }
+      ]
+    }
+
+---
+# 3. ENVOY & APPLICATION LOGS
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: platform-envoy-app-logs
+  namespace: observability
+spec:
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  folder: Platform
+  json: |
+    {
+      "title": "Envoy & Application Logs",
+      "uid": "platform-envoy-app-logs",
+      "description": "HashiCups pod logs, Envoy access logs (JSON parsed), and log volume by pod",
+      "tags": ["loki", "logs", "hashicups", "envoy", "platform"],
+      "timezone": "browser",
+      "schemaVersion": 38,
+      "refresh": "15s",
+      "graphTooltip": 1,
+      "time": { "from": "now-30m", "to": "now" },
+      "timepicker": {},
+      "editable": true,
+      "id": null,
+      "links": [],
+      "version": 1,
+      "templating": {
+        "list": [
+          { "name": "datacenter", "label": "Datacenter", "type": "custom", "query": "dc1,dc2", "includeAll": true, "allValue": "dc1|dc2", "multi": true, "hide": 0, "current": { "text": "All", "value": "$__all" }, "options": [ { "text": "All", "value": "$__all", "selected": true }, { "text": "dc1", "value": "dc1", "selected": false }, { "text": "dc2", "value": "dc2", "selected": false } ] },
+          { "name": "namespace", "label": "Namespace", "type": "query", "datasource": { "type": "loki", "uid": "LOKI_DC1" }, "definition": "label_values({datacenter=~\"$datacenter\"}, namespace)", "query": "label_values({datacenter=~\"$datacenter\"}, namespace)", "includeAll": true, "allValue": ".+", "multi": false, "hide": 0, "refresh": 2, "sort": 1, "current": {}, "options": [] },
+          { "name": "pod", "label": "Pod", "type": "query", "datasource": { "type": "loki", "uid": "LOKI_DC1" }, "definition": "label_values({datacenter=~\"$datacenter\", namespace=\"$namespace\"}, pod)", "query": "label_values({datacenter=~\"$datacenter\", namespace=\"$namespace\"}, pod)", "includeAll": true, "allValue": ".+", "multi": true, "hide": 0, "refresh": 2, "sort": 1, "current": {}, "options": [] }
+        ]
+      },
+      "panels": [
+        { "id": 1, "type": "stat", "title": "App Log Volume (lines/s)", "gridPos": { "h": 4, "w": 8, "x": 0, "y": 0 }, "datasource": { "type": "loki", "uid": "LOKI_DC1" }, "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] } }, "overrides": [] }, "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }, "targets": [ { "datasource": { "type": "loki", "uid": "LOKI_DC1" }, "refId": "A", "expr": "sum(rate({datacenter=~\"$datacenter\", namespace=~\"$namespace\", app=~\"frontend|nginx|payments|product-api|product-api-db|public-api\", pod=~\"$pod\"}[1m]))", "legendFormat": "lines/s" } ] },
+        { "id": 2, "type": "stat", "title": "App Error Rate (lines/s)", "gridPos": { "h": 4, "w": 8, "x": 8, "y": 0 }, "datasource": { "type": "loki", "uid": "LOKI_DC1" }, "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.1 }, { "color": "red", "value": 1 }] } }, "overrides": [] }, "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }, "targets": [ { "datasource": { "type": "loki", "uid": "LOKI_DC1" }, "refId": "A", "expr": "sum(rate({datacenter=~\"$datacenter\", namespace=~\"$namespace\", app=~\"frontend|nginx|payments|product-api|product-api-db|public-api\", pod=~\"$pod\"} |~ \"(?i)(error|fatal|panic)\"[1m]))", "legendFormat": "errors/s" } ] },
+        { "id": 3, "type": "stat", "title": "Envoy 5xx Rate (lines/s)", "gridPos": { "h": 4, "w": 8, "x": 16, "y": 0 }, "datasource": { "type": "loki", "uid": "LOKI_DC1" }, "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 0.05 }, { "color": "red", "value": 0.5 }] } }, "overrides": [] }, "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }, "targets": [ { "datasource": { "type": "loki", "uid": "LOKI_DC1" }, "refId": "A", "expr": "sum(rate({datacenter=~\"$datacenter\", namespace=~\"$namespace\", container=\"consul-dataplane\", pod=~\"$pod\"} | json | response_code >= 500 [1m]))", "legendFormat": "5xx/s" } ] },
+        { "id": 10, "type": "row", "title": "Log Volume by Pod", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 4 } },
+        { "id": 11, "type": "timeseries", "title": "App Log Lines / Second by Pod", "gridPos": { "h": 8, "w": 24, "x": 0, "y": 5 }, "datasource": { "type": "loki", "uid": "LOKI_DC1" }, "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 1, "fillOpacity": 10 }, "unit": "short" }, "overrides": [] }, "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } }, "targets": [ { "datasource": { "type": "loki", "uid": "LOKI_DC1" }, "refId": "A", "expr": "sum by (pod) (rate({datacenter=~\"$datacenter\", namespace=~\"$namespace\", app=~\"frontend|nginx|payments|product-api|product-api-db|public-api\", pod=~\"$pod\"}[$__interval]))", "legendFormat": "{{pod}}" } ] },
+        { "id": 20, "type": "row", "title": "HashiCups Application Logs", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 13 } },
+        { "id": 21, "type": "logs", "title": "HashiCups Pod Logs", "gridPos": { "h": 14, "w": 24, "x": 0, "y": 14 }, "datasource": { "type": "loki", "uid": "LOKI_DC1" }, "fieldConfig": { "defaults": {}, "overrides": [] }, "options": { "dedupStrategy": "none", "enableLogDetails": true, "prettifyLogMessage": false, "showCommonLabels": false, "showLabels": true, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": false }, "targets": [ { "datasource": { "type": "loki", "uid": "LOKI_DC1" }, "refId": "A", "expr": "{datacenter=~\"$datacenter\", namespace=~\"$namespace\", app=~\"frontend|nginx|payments|product-api|product-api-db|public-api\", pod=~\"$pod\"}", "legendFormat": "" } ] },
+        { "id": 30, "type": "row", "title": "Envoy Access Logs (JSON parsed)", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 28 } },
+        { "id": 31, "type": "logs", "title": "Envoy Access Logs", "gridPos": { "h": 14, "w": 24, "x": 0, "y": 29 }, "datasource": { "type": "loki", "uid": "LOKI_DC1" }, "fieldConfig": { "defaults": {}, "overrides": [] }, "options": { "dedupStrategy": "none", "enableLogDetails": true, "prettifyLogMessage": true, "showCommonLabels": false, "showLabels": false, "showTime": true, "sortOrder": "Descending", "wrapLogMessage": true }, "targets": [ { "datasource": { "type": "loki", "uid": "LOKI_DC1" }, "refId": "A", "expr": "{datacenter=~\"$datacenter\", namespace=~\"$namespace\", container=\"consul-dataplane\", pod=~\"$pod\"} | json | __error__=\"\"", "legendFormat": "" } ] }
+      ]
+    }
+
+---
+# 4. GATEWAY HEALTH
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: platform-gateway-health
+  namespace: observability
+spec:
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  folder: Platform
+  json: |
+    {
+      "title": "Gateway Health",
+      "uid": "platform-gateway-health",
+      "description": "API Gateway, Terminating Gateway, and Mesh Gateway traffic, errors, latency, and connection health",
+      "tags": ["consul", "gateway", "api-gateway", "mesh-gateway", "platform"],
+      "timezone": "browser",
+      "schemaVersion": 38,
+      "refresh": "30s",
+      "graphTooltip": 1,
+      "time": { "from": "now-1h", "to": "now" },
+      "timepicker": {},
+      "editable": true,
+      "id": null,
+      "links": [],
+      "version": 1,
+      "templating": {
+        "list": [
+          { "name": "datacenter", "label": "Datacenter", "type": "query", "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "definition": "label_values(up{job=~\"consul-api-gateway|consul-mesh-gateway\"}, datacenter)", "query": { "query": "label_values(up{job=~\"consul-api-gateway|consul-mesh-gateway\"}, datacenter)", "refId": "StandardVariableQuery" }, "includeAll": true, "allValue": ".*", "multi": true, "hide": 0, "refresh": 2, "sort": 1, "current": {}, "options": [] },
+          { "name": "namespace", "label": "Namespace", "type": "query", "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "definition": "label_values(up, namespace)", "query": { "query": "label_values(up, namespace)", "refId": "StandardVariableQuery" }, "includeAll": true, "allValue": ".*", "multi": false, "hide": 0, "refresh": 2, "sort": 1, "current": {}, "options": [] }
+        ]
+      },
+      "panels": [
+        { "id": 1, "type": "stat", "title": "API GW Request Rate", "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "unit": "reqps", "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] } }, "overrides": [] }, "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "sum(rate(envoy_http_downstream_rq_total{job=\"consul-api-gateway\", datacenter=~\"$datacenter\"}[5m]))", "instant": true, "legendFormat": "RPS" } ] },
+        { "id": 2, "type": "stat", "title": "API GW 5xx Error Rate", "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "unit": "percent", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 5 }] } }, "overrides": [] }, "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "100 * sum(rate(envoy_http_downstream_rq_5xx{job=\"consul-api-gateway\", datacenter=~\"$datacenter\"}[5m])) / clamp_min(sum(rate(envoy_http_downstream_rq_total{job=\"consul-api-gateway\", datacenter=~\"$datacenter\"}[5m])), 1)", "instant": true, "legendFormat": "Error %" } ] },
+        { "id": 3, "type": "stat", "title": "API GW P99 Latency", "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "unit": "ms", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 500 }, { "color": "red", "value": 2000 }] } }, "overrides": [] }, "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "histogram_quantile(0.99, sum by (le) (rate(envoy_http_downstream_rq_time_bucket{job=\"consul-api-gateway\", datacenter=~\"$datacenter\"}[5m])))", "instant": true, "legendFormat": "P99 ms" } ] },
+        { "id": 4, "type": "stat", "title": "API GW Active Downstream Connections", "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] } }, "overrides": [] }, "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "sum(envoy_http_downstream_cx_active{job=\"consul-api-gateway\", datacenter=~\"$datacenter\"})", "instant": true, "legendFormat": "Active Connections" } ] },
+        { "id": 10, "type": "row", "title": "API Gateway", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 4 } },
+        { "id": 11, "type": "timeseries", "title": "API GW Request Rate (RPS)", "gridPos": { "h": 8, "w": 8, "x": 0, "y": 5 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 1, "fillOpacity": 10 }, "unit": "reqps" }, "overrides": [] }, "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "none" } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "sum by (pod) (rate(envoy_http_downstream_rq_total{job=\"consul-api-gateway\", datacenter=~\"$datacenter\"}[5m]))", "legendFormat": "{{pod}}" } ] },
+        { "id": 12, "type": "timeseries", "title": "API GW Error Rate by Status Class (%)", "gridPos": { "h": 8, "w": 8, "x": 8, "y": 5 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 1, "fillOpacity": 10 }, "unit": "percent" }, "overrides": [] }, "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "none" } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "100 * sum(rate(envoy_http_downstream_rq_4xx{job=\"consul-api-gateway\", datacenter=~\"$datacenter\"}[5m])) / clamp_min(sum(rate(envoy_http_downstream_rq_total{job=\"consul-api-gateway\", datacenter=~\"$datacenter\"}[5m])), 1)", "legendFormat": "4xx %" }, { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "B", "expr": "100 * sum(rate(envoy_http_downstream_rq_5xx{job=\"consul-api-gateway\", datacenter=~\"$datacenter\"}[5m])) / clamp_min(sum(rate(envoy_http_downstream_rq_total{job=\"consul-api-gateway\", datacenter=~\"$datacenter\"}[5m])), 1)", "legendFormat": "5xx %" } ] },
+        { "id": 13, "type": "timeseries", "title": "API GW Latency Percentiles (ms)", "gridPos": { "h": 8, "w": 8, "x": 16, "y": 5 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 1, "fillOpacity": 10 }, "unit": "ms" }, "overrides": [] }, "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "none" } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "histogram_quantile(0.50, sum by (le) (rate(envoy_http_downstream_rq_time_bucket{job=\"consul-api-gateway\", datacenter=~\"$datacenter\"}[5m])))", "legendFormat": "P50" }, { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "B", "expr": "histogram_quantile(0.95, sum by (le) (rate(envoy_http_downstream_rq_time_bucket{job=\"consul-api-gateway\", datacenter=~\"$datacenter\"}[5m])))", "legendFormat": "P95" }, { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "C", "expr": "histogram_quantile(0.99, sum by (le) (rate(envoy_http_downstream_rq_time_bucket{job=\"consul-api-gateway\", datacenter=~\"$datacenter\"}[5m])))", "legendFormat": "P99" } ] },
+        { "id": 20, "type": "row", "title": "Terminating Gateway (External Services)", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 21 } },
+        { "id": 21, "type": "timeseries", "title": "Terminating GW External RPS", "gridPos": { "h": 8, "w": 8, "x": 0, "y": 22 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 1, "fillOpacity": 10 }, "unit": "reqps" }, "overrides": [] }, "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "none" } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "sum by (pod) (rate(envoy_cluster_upstream_rq_total{pod=~\".*terminating.*\", datacenter=~\"$datacenter\"}[5m]))", "legendFormat": "{{pod}}" } ] },
+        { "id": 22, "type": "timeseries", "title": "Terminating GW External Error Rate (%)", "gridPos": { "h": 8, "w": 8, "x": 8, "y": 22 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 1, "fillOpacity": 10 }, "unit": "percent" }, "overrides": [] }, "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "none" } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "100 * sum by (pod) (rate(envoy_cluster_upstream_rq_5xx{pod=~\".*terminating.*\", datacenter=~\"$datacenter\"}[5m])) / clamp_min(sum by (pod) (rate(envoy_cluster_upstream_rq_total{pod=~\".*terminating.*\", datacenter=~\"$datacenter\"}[5m])), 1)", "legendFormat": "{{pod}}" } ] },
+        { "id": 23, "type": "timeseries", "title": "Terminating GW External P99 Latency (ms)", "gridPos": { "h": 8, "w": 8, "x": 16, "y": 22 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 1, "fillOpacity": 10 }, "unit": "ms" }, "overrides": [] }, "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "none" } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "histogram_quantile(0.99, sum by (le, pod) (rate(envoy_cluster_upstream_rq_time_bucket{pod=~\".*terminating.*\", datacenter=~\"$datacenter\"}[5m])))", "legendFormat": "P99 {{pod}}" } ] },
+        { "id": 30, "type": "row", "title": "Mesh Gateway (Cross-DC Traffic)", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 30 } },
+        { "id": 31, "type": "timeseries", "title": "Mesh GW Upstream Request Rate", "gridPos": { "h": 8, "w": 12, "x": 0, "y": 31 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 1, "fillOpacity": 10 }, "unit": "reqps" }, "overrides": [] }, "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "none" } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "sum by (pod) (rate(envoy_cluster_upstream_rq_total{job=\"consul-mesh-gateway\", datacenter=~\"$datacenter\"}[5m]))", "legendFormat": "{{pod}}" } ] },
+        { "id": 32, "type": "timeseries", "title": "Mesh GW Active Upstream Connections", "gridPos": { "h": 8, "w": 12, "x": 12, "y": 31 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 1, "fillOpacity": 10 }, "unit": "short" }, "overrides": [] }, "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "none" } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "sum by (pod) (envoy_cluster_upstream_cx_active{job=\"consul-mesh-gateway\", datacenter=~\"$datacenter\"})", "legendFormat": "{{pod}}" } ] }
+      ]
+    }
+
+---
+# 5. POD HEALTH
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: platform-pod-health
+  namespace: observability
+spec:
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  folder: Platform
+  json: |
+    {
+      "title": "Pod Health — Kubernetes",
+      "uid": "platform-pod-health",
+      "description": "Per-namespace/pod CPU, memory, restart counts, readiness, and network I/O",
+      "tags": ["kubernetes", "pods", "resources", "platform"],
+      "timezone": "browser",
+      "schemaVersion": 38,
+      "refresh": "30s",
+      "graphTooltip": 1,
+      "time": { "from": "now-1h", "to": "now" },
+      "timepicker": {},
+      "editable": true,
+      "id": null,
+      "links": [],
+      "version": 1,
+      "templating": {
+        "list": [
+          { "name": "datacenter", "label": "Datacenter", "type": "custom", "query": "dc1,dc2", "includeAll": true, "allValue": "dc1|dc2", "multi": true, "hide": 0, "current": { "text": "All", "value": "$__all" }, "options": [ { "text": "All", "value": "$__all", "selected": true }, { "text": "dc1", "value": "dc1", "selected": false }, { "text": "dc2", "value": "dc2", "selected": false } ] },
+          { "name": "namespace", "label": "Namespace", "type": "query", "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "definition": "label_values(container_cpu_usage_seconds_total{container!=\"\", container!=\"POD\", datacenter=~\"$datacenter\"}, namespace)", "query": { "query": "label_values(container_cpu_usage_seconds_total{container!=\"\", container!=\"POD\", datacenter=~\"$datacenter\"}, namespace)", "refId": "StandardVariableQuery" }, "includeAll": false, "multi": false, "hide": 0, "refresh": 2, "sort": 1, "current": {}, "options": [] },
+          { "name": "pod", "label": "Pod", "type": "query", "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "definition": "label_values(container_cpu_usage_seconds_total{namespace=\"$namespace\", container!=\"\", container!=\"POD\", datacenter=~\"$datacenter\"}, pod)", "query": { "query": "label_values(container_cpu_usage_seconds_total{namespace=\"$namespace\", container!=\"\", container!=\"POD\", datacenter=~\"$datacenter\"}, pod)", "refId": "StandardVariableQuery" }, "includeAll": true, "allValue": ".*", "multi": true, "hide": 0, "refresh": 2, "sort": 1, "current": {}, "options": [] }
+        ]
+      },
+      "panels": [
+        { "id": 1, "type": "stat", "title": "Running Pods", "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] } }, "overrides": [] }, "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "count(kube_pod_status_phase{namespace=\"$namespace\", pod=~\"$pod\", datacenter=~\"$datacenter\", phase=\"Running\"} == 1) or vector(0)", "instant": true, "legendFormat": "Running" } ] },
+        { "id": 2, "type": "stat", "title": "Pending Pods", "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }] } }, "overrides": [] }, "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "count(kube_pod_status_phase{namespace=\"$namespace\", pod=~\"$pod\", datacenter=~\"$datacenter\", phase=\"Pending\"} == 1) or vector(0)", "instant": true, "legendFormat": "Pending" } ] },
+        { "id": 3, "type": "stat", "title": "Failed Pods", "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } }, "overrides": [] }, "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "count(kube_pod_status_phase{namespace=\"$namespace\", pod=~\"$pod\", datacenter=~\"$datacenter\", phase=\"Failed\"} == 1) or vector(0)", "instant": true, "legendFormat": "Failed" } ] },
+        { "id": 4, "type": "stat", "title": "Container Restarts (last 1h)", "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "thresholds" }, "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 1 }, { "color": "red", "value": 5 }] } }, "overrides": [] }, "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=\"$namespace\", pod=~\"$pod\", datacenter=~\"$datacenter\"}[1h]))", "instant": true, "legendFormat": "Restarts" } ] },
+        { "id": 10, "type": "row", "title": "CPU & Memory", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 4 } },
+        { "id": 11, "type": "timeseries", "title": "CPU Usage by Pod (cores)", "gridPos": { "h": 8, "w": 12, "x": 0, "y": 5 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 1, "fillOpacity": 10 }, "unit": "short" }, "overrides": [] }, "options": { "legend": { "calcs": ["lastNotNull", "mean", "max"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"$namespace\", pod=~\"$pod\", datacenter=~\"$datacenter\", container!=\"\", container!=\"POD\"}[5m]))", "legendFormat": "{{pod}}" } ] },
+        { "id": 12, "type": "timeseries", "title": "Memory Working Set by Pod", "gridPos": { "h": 8, "w": 12, "x": 12, "y": 5 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 1, "fillOpacity": 10 }, "unit": "bytes" }, "overrides": [] }, "options": { "legend": { "calcs": ["lastNotNull", "mean", "max"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "sum by (pod) (container_memory_working_set_bytes{namespace=\"$namespace\", pod=~\"$pod\", datacenter=~\"$datacenter\", container!=\"\", container!=\"POD\"})", "legendFormat": "{{pod}}" } ] },
+        { "id": 20, "type": "row", "title": "Pod Status & Restarts", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 13 } },
+        { "id": 21, "type": "timeseries", "title": "Container Restarts Over Time", "gridPos": { "h": 8, "w": 12, "x": 0, "y": 14 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 2, "fillOpacity": 20 }, "unit": "short" }, "overrides": [] }, "options": { "legend": { "calcs": ["lastNotNull", "max"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "sum by (pod) (increase(kube_pod_container_status_restarts_total{namespace=\"$namespace\", pod=~\"$pod\", datacenter=~\"$datacenter\"}[$__rate_interval]))", "legendFormat": "{{pod}}" } ] },
+        { "id": 22, "type": "timeseries", "title": "Pod Readiness (Ready Containers)", "gridPos": { "h": 8, "w": 12, "x": 12, "y": 14 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 1, "fillOpacity": 10 }, "unit": "short", "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] } }, "overrides": [] }, "options": { "legend": { "calcs": ["lastNotNull"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "none" } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "sum by (pod) (kube_pod_container_status_ready{namespace=\"$namespace\", pod=~\"$pod\", datacenter=~\"$datacenter\"})", "legendFormat": "{{pod}}" } ] },
+        { "id": 30, "type": "row", "title": "Network I/O", "collapsed": false, "gridPos": { "h": 1, "w": 24, "x": 0, "y": 22 } },
+        { "id": 31, "type": "timeseries", "title": "Network Receive by Pod (bytes/s)", "gridPos": { "h": 8, "w": 12, "x": 0, "y": 23 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 1, "fillOpacity": 10 }, "unit": "Bps" }, "overrides": [] }, "options": { "legend": { "calcs": ["lastNotNull", "mean"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "sum by (pod) (rate(container_network_receive_bytes_total{namespace=\"$namespace\", pod=~\"$pod\", datacenter=~\"$datacenter\"}[5m]))", "legendFormat": "{{pod}}" } ] },
+        { "id": 32, "type": "timeseries", "title": "Network Transmit by Pod (bytes/s)", "gridPos": { "h": 8, "w": 12, "x": 12, "y": 23 }, "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" }, "custom": { "lineWidth": 1, "fillOpacity": 10 }, "unit": "Bps" }, "overrides": [] }, "options": { "legend": { "calcs": ["lastNotNull", "mean"], "displayMode": "list", "placement": "bottom" }, "tooltip": { "mode": "multi", "sort": "desc" } }, "targets": [ { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A", "expr": "sum by (pod) (rate(container_network_transmit_bytes_total{namespace=\"$namespace\", pod=~\"$pod\", datacenter=~\"$datacenter\"}[5m]))", "legendFormat": "{{pod}}" } ] }
+      ]
+    }
