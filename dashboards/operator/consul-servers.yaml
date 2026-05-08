@@ -1,0 +1,106 @@
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: consul-servers
+  namespace: observability
+spec:
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
+  folder: Platform
+  json: |
+    {
+      "title": "Consul Servers",
+      "uid": "platform-consul-servers",
+      "description": "Per-datacenter Consul server health: autopilot, Raft, RPC query performance, runtime, and cluster peering",
+      "tags": ["consul", "servers", "raft", "peering", "platform"],
+      "timezone": "browser",
+      "schemaVersion": 38,
+      "refresh": "30s",
+      "graphTooltip": 1,
+      "time": { "from": "now-1h", "to": "now" },
+      "timepicker": {},
+      "editable": true,
+      "id": null,
+      "links": [],
+      "version": 1,
+      "templating": {
+        "list": [
+          {
+            "name": "datacenter",
+            "label": "Datacenter",
+            "type": "query",
+            "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+            "definition": "label_values(up{job=\"consul-servers\"}, datacenter)",
+            "query": { "query": "label_values(up{job=\"consul-servers\"}, datacenter)", "refId": "StandardVariableQuery" },
+            "includeAll": true,
+            "allValue": ".*",
+            "multi": true,
+            "hide": 0,
+            "refresh": 2,
+            "sort": 1,
+            "current": {},
+            "options": []
+          },
+          {
+            "name": "pod",
+            "label": "Server Pod",
+            "type": "query",
+            "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+            "definition": "label_values(up{job=\"consul-servers\", datacenter=~\"$datacenter\"}, pod)",
+            "query": { "query": "label_values(up{job=\"consul-servers\", datacenter=~\"$datacenter\"}, pod)", "refId": "StandardVariableQuery" },
+            "includeAll": true,
+            "allValue": ".*",
+            "multi": true,
+            "hide": 0,
+            "refresh": 2,
+            "sort": 1,
+            "current": {},
+            "options": []
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1, "type": "stat", "title": "Consul Servers Up",
+          "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [{ "type": "value", "options": { "0": { "text": "DOWN", "color": "red", "index": 0 } } }],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+            },
+            "overrides": []
+          },
+          "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+          "targets": [
+            { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A",
+              "expr": "sum(up{job=\"consul-servers\", datacenter=~\"$datacenter\"} == 1) or vector(0)",
+              "instant": true, "legendFormat": "Servers Up" }
+          ]
+        },
+        {
+          "id": 2, "type": "stat", "title": "Autopilot Healthy",
+          "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+          "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" },
+          "fieldConfig": {
+            "defaults": {
+              "color": { "mode": "thresholds" },
+              "mappings": [{ "type": "value", "options": {
+                "0": { "text": "UNHEALTHY", "color": "red", "index": 0 },
+                "1": { "text": "HEALTHY", "color": "green", "index": 1 }
+              }}],
+              "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 1 }] }
+            },
+            "overrides": []
+          },
+          "options": { "colorMode": "background", "graphMode": "none", "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false } },
+          "targets": [
+            { "datasource": { "type": "prometheus", "uid": "PBFA97CFB590B2093" }, "refId": "A",
+              "expr": "min(consul_autopilot_healthy{datacenter=~\"$datacenter\"}) or vector(0)",
+              "instant": true, "legendFormat": "Autopilot" }
+          ]
+        }
+      ]
+    }
