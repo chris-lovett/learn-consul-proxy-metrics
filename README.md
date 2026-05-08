@@ -27,7 +27,14 @@ kubectl get svc prometheus-server -n observability
 
 The expected Prometheus service is `prometheus-server` in the `observability` namespace on port 80 (HTTP internally).
 
-## Step 1: Download and Import Grafana Dashboards
+## Step 1: Acquire Dashboard JSON and Understand Reconciliation
+
+There are two distinct flows in this environment:
+
+1. **Upstream dashboard acquisition** (download dashboard JSON from `hashicorp/consul` into this repo)
+2. **Local cluster reconciliation** (Grafana Operator continuously applies dashboards from Kubernetes resources in `observability`)
+
+### 1A) Download upstream dashboards (for Consul UI deep-link use cases)
 
 The official Consul Grafana dashboards live in the main `hashicorp/consul` GitHub repository under the `grafana/` directory. The filenames use no hyphens or separators.
 
@@ -44,7 +51,7 @@ curl -L -o dashboards/consul-service-to-service.json \
   https://raw.githubusercontent.com/hashicorp/consul/main/grafana/consulservicetoservicedashboard.json
 ```
 
-> **Common mistake:** Earlier versions of HashiCorp tutorial repos used different filenames like `consul-data-plane-health.json`. These no longer exist at those paths. The current canonical filenames are shown above. If `curl` returns a 14-byte file, the path is wrong — check the file size with `ls -lh dashboards/`.
+> **Common mistake:** Earlier versions of HashiCorp tutorial repos used different filenames like `consul-data-plane-health.json`. These no longer exist at those upstream paths. The current canonical upstream filenames are shown above. If `curl` returns a 14-byte file, the path is wrong — check the file size with `ls -lh dashboards/`.
 
 Verify the downloads succeeded:
 
@@ -58,7 +65,7 @@ grep '"uid"' dashboards/consul-dataplane.json
 
 Note the `uid` values — you will need the `consul-service` UID for the Helm values in the next step.
 
-### Import into Grafana
+### Optional manual Grafana UI import
 
 Open your Grafana Route URL in a browser. On OpenShift, expose Grafana if no route exists yet:
 
@@ -78,6 +85,93 @@ In the Grafana UI:
 2. Upload `dashboards/consul-service.json` — note the UID shown during import
 3. Upload `dashboards/consul-dataplane.json`
 4. Upload `dashboards/consul-service-to-service.json`
+
+### 1B) Reconcile the local Consul data-plane dashboards in this cluster (source-of-truth path)
+
+For this repository's live OpenShift environment, dashboard persistence is managed by the Grafana Operator with this control loop:
+
+`dashboards/*.json` → `ConfigMap` → `GrafanaDashboard` → Grafana Operator → Grafana UI
+
+The live resources are in namespace `observability`:
+
+- `ConfigMap/consul-data-plane-health` (key: `consul-data-plane-health.json`)
+- `ConfigMap/consul-data-plane-performance` (key: `consul-data-plane-performance.json`)
+- `GrafanaDashboard/consul-data-plane-health`
+- `GrafanaDashboard/consul-data-plane-performance`
+
+The manifests for this model are now in `openshift/grafana-dashboards/`:
+
+- `configmap-consul-data-plane-health.yaml`
+- `configmap-consul-data-plane-performance.yaml`
+- `kustomization.yaml` (applies both ConfigMaps and both GrafanaDashboard CRs)
+- `grafanadashboard-consul-data-plane-health.yaml`
+- `grafanadashboard-consul-data-plane-performance.yaml`
+
+Apply them to reproduce the setup from source control:
+
+```bash
+oc apply -k openshift/grafana-dashboards
+```
+
+> **Important:** UI-only edits do not persist. The operator reconciles from ConfigMap content and overwrites drift in Grafana on resync.
+
+Use the sync helper to push local JSON into the live ConfigMaps and request a reconcile:
+
+```bash
+./scripts/sync-grafana-dashboards.sh
+```
+
+Override defaults when needed:
+
+```bash
+NAMESPACE=observability DASHBOARD_DIR=./dashboards ./scripts/sync-grafana-dashboards.sh
+```
+
+### Recommended workflow for dashboard or panel updates
+
+1. Edit the target dashboard in Grafana UI (or edit JSON directly).
+2. Export the full updated dashboard JSON from Grafana.
+3. Save it to the matching source-controlled file:
+   - `dashboards/consul-data-plane-health.json` or
+   - `dashboards/consul-data-plane-performance.json`
+4. Regenerate the matching ConfigMap manifest so source control stays reproducible:
+
+```bash
+kubectl create configmap consul-data-plane-health -n observability \
+  --from-file=consul-data-plane-health.json=dashboards/consul-data-plane-health.json \
+  --dry-run=client -o yaml > openshift/grafana-dashboards/configmap-consul-data-plane-health.yaml
+
+kubectl create configmap consul-data-plane-performance -n observability \
+  --from-file=consul-data-plane-performance.json=dashboards/consul-data-plane-performance.json \
+  --dry-run=client -o yaml > openshift/grafana-dashboards/configmap-consul-data-plane-performance.yaml
+```
+
+5. Sync to the live cluster:
+
+```bash
+./scripts/sync-grafana-dashboards.sh
+```
+
+6. Commit the JSON and manifest changes so the reconciled state is reproducible.
+
+If you skip steps 3-6, the next operator reconcile can overwrite your UI-only changes.
+
+### Verify live reconciliation state
+
+Check which JSON is currently stored in the live ConfigMaps:
+
+```bash
+oc get configmap consul-data-plane-health -n observability -o yaml
+oc get configmap consul-data-plane-performance -n observability -o yaml
+```
+
+Check GrafanaDashboard reconcile status:
+
+```bash
+oc get grafanadashboard -n observability
+oc get grafanadashboard consul-data-plane-health -n observability -o yaml
+oc get grafanadashboard consul-data-plane-performance -n observability -o yaml
+```
 
 ## Step 2: Update Consul Helm Values
 
