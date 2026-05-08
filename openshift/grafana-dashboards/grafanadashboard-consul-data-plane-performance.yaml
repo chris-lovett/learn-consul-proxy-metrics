@@ -1,0 +1,12 @@
+apiVersion: grafana.integreatly.org/v1beta1
+kind: GrafanaDashboard
+metadata:
+  name: consul-data-plane-performance
+  namespace: observability
+spec:
+  configMapRef:
+    name: consul-data-plane-performance
+    key: consul-data-plane-performance.json
+  instanceSelector:
+    matchLabels:
+      dashboards: grafana
