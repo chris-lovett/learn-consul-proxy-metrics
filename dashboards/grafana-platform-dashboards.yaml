@@ -37,7 +37,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: grafana-dashboard-consul-servers
-  namespace: monitoring
+  namespace: observability
   labels:
     grafana_dashboard: "1"
   annotations:
@@ -353,7 +353,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: grafana-dashboard-hashicups-health
-  namespace: monitoring
+  namespace: observability
   labels:
     grafana_dashboard: "1"
   annotations:
@@ -649,7 +649,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: grafana-dashboard-envoy-app-logs
-  namespace: monitoring
+  namespace: observability
   labels:
     grafana_dashboard: "1"
   annotations:
@@ -855,7 +855,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: grafana-dashboard-consul-logs
-  namespace: monitoring
+  namespace: observability
   labels:
     grafana_dashboard: "1"
   annotations:
@@ -1048,7 +1048,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: grafana-dashboard-gateway-health
-  namespace: monitoring
+  namespace: observability
   labels:
     grafana_dashboard: "1"
   annotations:
@@ -1373,7 +1373,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: grafana-dashboard-pod-health
-  namespace: monitoring
+  namespace: observability
   labels:
     grafana_dashboard: "1"
   annotations:
@@ -1648,7 +1648,7 @@ apiVersion: v1
 kind: ConfigMap
 metadata:
   name: grafana-dashboard-unified-logs
-  namespace: monitoring
+  namespace: observability
   labels:
     grafana_dashboard: "1"
   annotations:
