@@ -1,0 +1,335 @@
+{
+  "title": "HashiCups Service Health",
+  "uid": "platform-hashicups-health",
+  "description": "HashiCups inter-service traffic, error rates, latency, upstream connections, and circuit breaker status",
+  "tags": [
+    "hashicups",
+    "envoy",
+    "service-mesh",
+    "platform"
+  ],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "refresh": "30s",
+  "graphTooltip": 1,
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "editable": true,
+  "id": null,
+  "links": [],
+  "version": 1,
+  "templating": {
+    "list": [
+      {
+        "name": "datacenter",
+        "label": "Datacenter",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "PBFA97CFB590B2093"
+        },
+        "definition": "label_values(envoy_cluster_upstream_rq_total{app=~\"frontend|nginx|payments|product-api|product-api-db|public-api\"}, datacenter)",
+        "query": {
+          "query": "label_values(envoy_cluster_upstream_rq_total{app=~\"frontend|nginx|payments|product-api|product-api-db|public-api\"}, datacenter)",
+          "refId": "StandardVariableQuery"
+        },
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "hide": 0,
+        "refresh": 2,
+        "sort": 1,
+        "current": {},
+        "options": []
+      },
+      {
+        "name": "namespace",
+        "label": "Namespace",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "PBFA97CFB590B2093"
+        },
+        "definition": "label_values(envoy_cluster_upstream_rq_total{datacenter=~\"$datacenter\", app=~\"frontend|nginx|payments|product-api|product-api-db|public-api\"}, namespace)",
+        "query": {
+          "query": "label_values(envoy_cluster_upstream_rq_total{datacenter=~\"$datacenter\", app=~\"frontend|nginx|payments|product-api|product-api-db|public-api\"}, namespace)",
+          "refId": "StandardVariableQuery"
+        },
+        "includeAll": false,
+        "multi": false,
+        "hide": 0,
+        "refresh": 2,
+        "sort": 1,
+        "current": {},
+        "options": []
+      },
+      {
+        "name": "app",
+        "label": "Application",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "PBFA97CFB590B2093"
+        },
+        "definition": "label_values(envoy_cluster_upstream_rq_total{namespace=\"$namespace\", datacenter=~\"$datacenter\"}, app)",
+        "query": {
+          "query": "label_values(envoy_cluster_upstream_rq_total{namespace=\"$namespace\", datacenter=~\"$datacenter\"}, app)",
+          "refId": "StandardVariableQuery"
+        },
+        "includeAll": true,
+        "allValue": "frontend|nginx|payments|product-api|product-api-db|public-api",
+        "multi": true,
+        "hide": 0,
+        "refresh": 2,
+        "sort": 1,
+        "current": {},
+        "options": []
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Total RPS",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 0,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "reqps",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "area",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "refId": "A",
+          "expr": "sum(rate(envoy_cluster_upstream_rq_total{namespace=\"$namespace\", datacenter=~\"$datacenter\", app=~\"$app\"}[5m]))",
+          "instant": true,
+          "legendFormat": "RPS"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Overall 5xx Error Rate",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 6,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "percent",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "refId": "A",
+          "expr": "100 * sum(rate(envoy_cluster_upstream_rq_5xx{namespace=\"$namespace\", datacenter=~\"$datacenter\", app=~\"$app\"}[5m])) / clamp_min(sum(rate(envoy_cluster_upstream_rq_total{namespace=\"$namespace\", datacenter=~\"$datacenter\", app=~\"$app\"}[5m])), 1)",
+          "instant": true,
+          "legendFormat": "Error %"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "P95 Upstream Latency",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 12,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "ms",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 250
+              },
+              {
+                "color": "red",
+                "value": 1000
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(envoy_cluster_upstream_rq_time_bucket{namespace=\"$namespace\", datacenter=~\"$datacenter\", app=~\"$app\"}[5m])))",
+          "instant": true,
+          "legendFormat": "P95 ms"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Active Upstream Connections",
+      "gridPos": {
+        "h": 4,
+        "w": 6,
+        "x": 18,
+        "y": 0
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "PBFA97CFB590B2093"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "PBFA97CFB590B2093"
+          },
+          "refId": "A",
+          "expr": "sum(envoy_cluster_upstream_cx_active{namespace=\"$namespace\", datacenter=~\"$datacenter\", app=~\"$app\"})",
+          "instant": true,
+          "legendFormat": "Active Connections"
+        }
+      ]
+    }
+  ]
+}

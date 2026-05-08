@@ -60,11 +60,6 @@ sidecar:
     label: grafana_dashboard
     labelValue: "1"
     searchNamespace: observability
-  securityContext:
-    allowPrivilegeEscalation: false
-    capabilities:
-      drop: ["ALL"]
-    runAsNonRoot: true
 
 # Pre-load the Consul dashboards from the dashboards/ directory
 # Apply these separately as ConfigMaps (see instructions below)
