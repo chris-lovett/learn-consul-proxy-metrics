@@ -21,8 +21,7 @@ sync_dashboard() {
     --from-file="${key_name}=${file_path}" \
     --dry-run=client -o yaml | oc apply -f -
 
-  local epoch
-  epoch="$(date +%s)"
+  local epoch="$(date +%s)"
 
   echo "Requesting resync for GrafanaDashboard/${gd_name}..."
   oc annotate grafanadashboard "$gd_name" \

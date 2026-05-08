@@ -51,7 +51,7 @@ curl -L -o dashboards/consul-service-to-service.json \
   https://raw.githubusercontent.com/hashicorp/consul/main/grafana/consulservicetoservicedashboard.json
 ```
 
-> **Common mistake:** Earlier versions of HashiCorp tutorial repos used different filenames like `consul-data-plane-health.json`. These no longer exist at those upstream paths. The current canonical upstream filenames are shown above. If `curl` returns a 14-byte file, the path is wrong — check the file size with `ls -lh dashboards/`.
+> **Common mistake:** Earlier versions of HashiCorp tutorial repos used different filenames like `consul-data-plane-health.json`. These hyphenated filenames no longer exist in the upstream `hashicorp/consul` `grafana/` path (this repository still uses them locally for operator-reconciled dashboards). If `curl` returns a 14-byte file, the upstream path is wrong — check the file size with `ls -lh dashboards/`.
 
 Verify the downloads succeeded:
 
@@ -118,6 +118,7 @@ oc apply -k openshift/grafana-dashboards
 Use the sync helper to push local JSON into the live ConfigMaps and request a reconcile:
 
 ```bash
+chmod +x scripts/sync-grafana-dashboards.sh
 ./scripts/sync-grafana-dashboards.sh
 ```
 
