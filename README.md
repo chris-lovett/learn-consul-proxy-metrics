@@ -1,6 +1,6 @@
 # Enabling Consul UI Topology Metrics and Grafana Deep Links on OpenShift
 
-This guide walks through fully enabling the Consul UI topology metrics view and per-service Grafana dashboard deep links for a Consul deployment on OpenShift (ROSA). It incorporates lessons learned from a real deployment, including common pitfalls and their fixes.
+This guide walks through enabling the Consul UI topology metrics view and per-service Grafana dashboard deep links for a Consul deployment on OpenShift. It incorporates lessons learned from a real deployment, including common pitfalls and their fixes.
 
 ## Overview
 
