@@ -1,8 +1,19 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
+namespace: observability
+
 resources:
-  - configmap-consul-data-plane-health.yaml
-  - configmap-consul-data-plane-performance.yaml
   - grafanadashboard-consul-data-plane-health.yaml
   - grafanadashboard-consul-data-plane-performance.yaml
+
+generatorOptions:
+  disableNameSuffixHash: true
+
+configMapGenerator:
+  - name: consul-data-plane-health
+    files:
+      - consul-data-plane-health.json=../../dashboards/consul-data-plane-health.json
+  - name: consul-data-plane-performance
+    files:
+      - consul-data-plane-performance.json=../../dashboards/consul-data-plane-performance.json

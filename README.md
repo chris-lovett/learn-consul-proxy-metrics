@@ -99,13 +99,20 @@ The live resources are in namespace `observability`:
 - `GrafanaDashboard/consul-data-plane-health`
 - `GrafanaDashboard/consul-data-plane-performance`
 
-The manifests for this model are now in `openshift/grafana-dashboards/`:
+`ConfigMap` and `GrafanaDashboard` are both required conceptually:
 
-- `configmap-consul-data-plane-health.yaml`
-- `configmap-consul-data-plane-performance.yaml`
-- `kustomization.yaml` (applies both ConfigMaps and both GrafanaDashboard CRs)
+- The ConfigMaps hold the dashboard JSON payload consumed by the operator.
+- The GrafanaDashboard CRs tell the operator which ConfigMap and key to reconcile.
+
+The authoritative files for this model are:
+
+- `dashboards/consul-data-plane-health.json`
+- `dashboards/consul-data-plane-performance.json`
+- `openshift/grafana-dashboards/kustomization.yaml`
 - `grafanadashboard-consul-data-plane-health.yaml`
 - `grafanadashboard-consul-data-plane-performance.yaml`
+
+`kustomization.yaml` generates stable-name ConfigMaps directly from `dashboards/*.json` (no checked-in rendered ConfigMap YAML files), then applies both GrafanaDashboard CRs.
 
 Apply them to reproduce the setup from source control:
 
@@ -134,25 +141,19 @@ NAMESPACE=observability DASHBOARD_DIR=./dashboards ./scripts/sync-grafana-dashbo
 3. Save it to the matching source-controlled file:
    - `dashboards/consul-data-plane-health.json` or
    - `dashboards/consul-data-plane-performance.json`
-4. Regenerate the matching ConfigMap manifest so source control stays reproducible:
+4. Apply the operator manifests (Kustomize regenerates both ConfigMaps from JSON automatically):
 
 ```bash
-kubectl create configmap consul-data-plane-health -n observability \
-  --from-file=consul-data-plane-health.json=dashboards/consul-data-plane-health.json \
-  --dry-run=client -o yaml > openshift/grafana-dashboards/configmap-consul-data-plane-health.yaml
-
-kubectl create configmap consul-data-plane-performance -n observability \
-  --from-file=consul-data-plane-performance.json=dashboards/consul-data-plane-performance.json \
-  --dry-run=client -o yaml > openshift/grafana-dashboards/configmap-consul-data-plane-performance.yaml
+oc apply -k openshift/grafana-dashboards
 ```
 
-5. Sync to the live cluster:
+5. Sync to the live cluster when you want to update existing ConfigMaps in-place and request reconcile:
 
 ```bash
 ./scripts/sync-grafana-dashboards.sh
 ```
 
-6. Commit the JSON and manifest changes so the reconciled state is reproducible.
+6. Commit JSON changes (and any intentional changes to the GrafanaDashboard CRs or kustomization).
 
 If you skip steps 3-6, the next operator reconcile can overwrite your UI-only changes.
 
